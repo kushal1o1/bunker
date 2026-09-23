@@ -87,6 +87,6 @@ func printPlan(cfg *config.Config, targets []string) error {
 	}
 
 	fmt.Println()
-	fmt.Println("Note: SSH + exec pipeline lands in M1; this is a dry-run stub.")
+	fmt.Println("This is a dry-run stub.:)")
 	return nil
 }
