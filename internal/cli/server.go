@@ -40,7 +40,7 @@ func newServerListCmd() *cobra.Command {
 
 func printServers(cfg *config.Config) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tHOST\tSSH\tDB\tMEDIA")
+	fmt.Fprintln(w, "NAME\tHOST\tSSH\tDB\tPATHS")
 	for _, name := range cfg.ServerNames() {
 		s := cfg.Servers[name]
 
@@ -48,13 +48,13 @@ func printServers(cfg *config.Config) error {
 		if s.Backup.Postgres != nil {
 			db = strings.Join(s.Backup.Postgres.Databases, ", ")
 		}
-		media := "-"
-		if len(s.Backup.Media) > 0 {
-			media = strings.Join(s.Backup.Media, ", ")
+		paths := "-"
+		if len(s.Backup.Paths) > 0 {
+			paths = strings.Join(s.Backup.Paths, ", ")
 		}
 
 		fmt.Fprintf(w, "%s\t%s\t%s (port %d)\t%s\t%s\n",
-			name, s.Host, s.SSH.User, s.SSH.Port, db, media)
+			name, s.Host, s.SSH.User, s.SSH.Port, db, paths)
 	}
 	return w.Flush()
 }
