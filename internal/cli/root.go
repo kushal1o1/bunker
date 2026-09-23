@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -20,7 +21,7 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVarP(&configPath, "config", "c", "bunker.yaml", "config file path")
-	root.AddCommand(newServerCmd(), newBackupCmd(), newVersionCmd())
+	root.AddCommand(newServerCmd(), newBackupCmd(), newVersionCmd(), newKeygenCmd())
 	return root
 }
 
@@ -37,7 +38,11 @@ func newVersionCmd() *cobra.Command {
 }
 
 func Execute(args []string) error {
+	return ExecuteContext(context.Background(), args)
+}
+
+func ExecuteContext(ctx context.Context, args []string) error {
 	cmd := newRootCmd()
 	cmd.SetArgs(args)
-	return cmd.Execute()
+	return cmd.ExecuteContext(ctx)
 }
