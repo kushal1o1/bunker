@@ -1,0 +1,31 @@
+servers:
+  vps-01:
+    host: 203.0.113.10
+    ssh:
+      user: deploy
+      port: 22
+    backup:
+      postgres:
+        dbs: [project1_db, project2_ prod_db]
+      media:
+        - /var/www/project1/uploads
+        - /srv/project2_prod_media
+  vps-02:
+    host: 203.0.113.20
+    ssh:
+      user: root
+      port: 22
+    backup:
+      postgres:
+        dbs: [project3_db]
+
+storage:
+  type: local
+  dir: ./backups
+
+retention:
+  daily: 7
+  weekly: 4
+  monthly: 6
+
+concurrency: 3
