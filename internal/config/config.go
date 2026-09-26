@@ -13,21 +13,25 @@ import (
 )
 
 const (
-	DefaultConfigPath  = "bunker.yaml"
-	DefaultConcurrency = 3
-	DefaultPort        = 22
-	DefaultSSHUser     = "root"
-	DefaultStorageType = "local"
-	DefaultStorageDir  = "./backups"
-	DefaultRetentionD  = 7
-	DefaultRetentionW  = 4
-	DefaultRetentionM  = 6
+	DefaultConfigPath   = "bunker.yaml"
+	DefaultConcurrency  = 3
+	DefaultPort         = 22
+	DefaultSSHUser      = "root"
+	DefaultSSHKey       = "~/.ssh/id_ed25519"
+	DefaultKnownHosts   = "~/.ssh/known_hosts"
+	DefaultIdentity     = "~/.config/bunker/key.txt"
+	DefaultStorageType  = "local"
+	DefaultStorageDir   = "./backups"
+	DefaultRetentionD   = 7
+	DefaultRetentionW   = 4
+	DefaultRetentionM   = 6
 )
 
 type Config struct {
 	Servers     map[string]model.ServerSpec `json:"servers" yaml:"servers"`
 	Storage     model.StorageSpec           `json:"storage" yaml:"storage"`
 	Retention   model.RetentionSpec         `json:"retention" yaml:"retention"`
+	Encryption  model.EncryptionSpec        `json:"encryption" yaml:"encryption"`
 	Concurrency int                         `json:"concurrency" yaml:"concurrency"`
 
 	Path string `json:"-"`
@@ -70,6 +74,9 @@ func (c *Config) setDefaults() {
 	if c.Retention.Monthly == 0 {
 		c.Retention.Monthly = DefaultRetentionM
 	}
+	if c.Encryption.Identity == "" {
+		c.Encryption.Identity = DefaultIdentity
+	}
 
 	for name := range c.Servers {
 		s := c.Servers[name]
@@ -78,6 +85,12 @@ func (c *Config) setDefaults() {
 		}
 		if s.SSH.Port == 0 {
 			s.SSH.Port = DefaultPort
+		}
+		if s.SSH.Key == "" {
+			s.SSH.Key = DefaultSSHKey
+		}
+		if s.SSH.KnownHosts == "" {
+			s.SSH.KnownHosts = DefaultKnownHosts
 		}
 		c.Servers[name] = s
 	}
@@ -105,14 +118,19 @@ func validateServer(name string, s model.ServerSpec) error {
 	if s.SSH.Port < 1 || s.SSH.Port > 65535 {
 		return fmt.Errorf("server %q: ssh port out of range: %d", name, s.SSH.Port)
 	}
-	if s.Backup.Postgres == nil && len(s.Backup.Media) == 0 {
-		return fmt.Errorf("server %q: backup must define at least one postgres db or media path", name)
+	if s.Backup.Postgres == nil && len(s.Backup.Paths) == 0 {
+		return fmt.Errorf("server %q: backup must define at least one postgres db or file path", name)
 	}
 	if s.Backup.Postgres != nil {
 		for _, db := range s.Backup.Postgres.Databases {
 			if strings.TrimSpace(db) == "" {
 				return fmt.Errorf("server %q: postgres db name cannot be empty", name)
 			}
+		}
+	}
+	for _, p := range s.Backup.Paths {
+		if strings.TrimSpace(p) == "" {
+			return fmt.Errorf("server %q: backup path cannot be empty", name)
 		}
 	}
 	return nil

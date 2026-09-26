@@ -54,7 +54,7 @@ func TestLoadMissingHost(t *testing.T) {
 servers:
   vps-01:
     backup:
-      media: [/srv/project1/media]
+      paths: [/srv/project1/media]
 `)
 
 	_, err := Load(path)
@@ -77,7 +77,7 @@ servers:
 	if err == nil {
 		t.Fatal("expected error for empty backup spec, got nil")
 	}
-	if !strings.Contains(err.Error(), "postgres db or media path") {
+	if !strings.Contains(err.Error(), "postgres db or file path") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -88,7 +88,7 @@ servers:
   vps-01:
     host: 203.0.113.10
     backup:
-      media: [/srv/project1/media]
+      paths: [/srv/project1/media]
 concurrenc: 5
 `)
 
@@ -113,11 +113,11 @@ servers:
   zebra:
     host: 203.0.113.1
     backup:
-      media: [/m]
+      paths: [/m]
   alpha:
     host: 203.0.113.2
     backup:
-      media: [/m]
+      paths: [/m]
 `)
 
 	cfg, err := Load(path)
