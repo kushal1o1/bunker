@@ -2,26 +2,35 @@ servers:
   vps-01:
     host: 203.0.113.10
     ssh:
-      user: deploy
+      user: backup-svc
       port: 22
+      key: ~/.ssh/id_ed25519
+      known_hosts: ~/.ssh/known_hosts
     backup:
       postgres:
-        dbs: [project1_db, project2_ prod_db]
-      media:
+        dbs: [project1_db, project2_prod_db]
+      paths:
         - /var/www/project1/uploads
         - /srv/project2_prod_media
   vps-02:
     host: 203.0.113.20
     ssh:
-      user: root
+      user: backup-svc
       port: 22
     backup:
       postgres:
         dbs: [project3_db]
+        # optional: connect over TCP with password from the server's ~/.pgpass
+        # user: bunker_backup
+        # host: 127.0.0.1
+        # port: 5432
 
 storage:
   type: local
   dir: ./backups
+
+encryption:
+  identity: ~/.config/bunker/key.txt
 
 retention:
   daily: 7
