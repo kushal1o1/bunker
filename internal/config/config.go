@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/kushal1o1/bunker/internal/model"
+	"github.com/kushal1o1/bunker/internal/pathexp"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,7 +23,7 @@ const (
 	DefaultKnownHosts   = "~/.ssh/known_hosts"
 	DefaultIdentity     = "~/.config/bunker/key.txt"
 	DefaultStorageType  = "local"
-	DefaultStorageDir   = "./backups"
+	DefaultStorageDir   = "~/backups"
 	DefaultRetentionD   = 7
 	DefaultRetentionW   = 4
 	DefaultRetentionM   = 6
@@ -65,6 +67,13 @@ func (c *Config) setDefaults() {
 	if c.Storage.Dir == "" {
 		c.Storage.Dir = DefaultStorageDir
 	}
+	// Resolve the storage root to an absolute path once, here, so every
+	// consumer (snapshot writing, the dry-run banner) sees the same real
+	// location. A bare "~/backups" left unexpanded would be treated as the
+	// relative path "./~/backups" and silently write into the CWD.
+	if dir := resolvePath(c.Storage.Dir); dir != "" {
+		c.Storage.Dir = dir
+	}
 	if c.Retention.Daily == 0 {
 		c.Retention.Daily = DefaultRetentionD
 	}
@@ -96,12 +105,30 @@ func (c *Config) setDefaults() {
 	}
 }
 
+// resolvePath expands a leading ~ and returns an absolute, cleaned path. It
+// returns "" if the home directory is unavailable, leaving the caller's value
+// untouched so validation can report the real problem.
+func resolvePath(p string) string {
+	p = pathexp.Expand(strings.TrimSpace(p))
+	if p == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return abs
+}
+
 func (c *Config) Validate() error {
 	if len(c.Servers) == 0 {
 		return errors.New("config must define at least one server")
 	}
 	if c.Concurrency < 1 {
 		return errors.New("concurrency must be >= 1")
+	}
+	if strings.TrimSpace(c.Storage.Dir) == "" {
+		return errors.New("storage.dir could not be resolved to an absolute path")
 	}
 	for name, s := range c.Servers {
 		if err := validateServer(name, s); err != nil {

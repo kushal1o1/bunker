@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kushal1o1/bunker/internal/pathexp"
 )
 
 func writeTemp(t *testing.T, name, content string) string {
@@ -34,8 +36,17 @@ servers:
 	if cfg.Concurrency != DefaultConcurrency {
 		t.Errorf("concurrency = %d, want %d", cfg.Concurrency, DefaultConcurrency)
 	}
-	if cfg.Storage.Type != DefaultStorageType || cfg.Storage.Dir != DefaultStorageDir {
-		t.Errorf("storage defaults not applied: %+v", cfg.Storage)
+	if cfg.Storage.Type != DefaultStorageType {
+		t.Errorf("storage type = %q, want %q", cfg.Storage.Type, DefaultStorageType)
+	}
+	// The default is "~/<x>", so it must arrive fully expanded and absolute --
+	// never the literal "~/<x>", which would resolve relative to the CWD.
+	wantDir := filepath.Join(pathexp.Home(), "backups")
+	if cfg.Storage.Dir != wantDir {
+		t.Errorf("storage dir = %q, want %q", cfg.Storage.Dir, wantDir)
+	}
+	if !filepath.IsAbs(cfg.Storage.Dir) {
+		t.Errorf("storage dir %q is not absolute", cfg.Storage.Dir)
 	}
 	if cfg.Retention.Daily != DefaultRetentionD || cfg.Retention.Weekly != DefaultRetentionW || cfg.Retention.Monthly != DefaultRetentionM {
 		t.Errorf("retention defaults not applied: %+v", cfg.Retention)
@@ -127,5 +138,62 @@ servers:
 	names := cfg.ServerNames()
 	if len(names) != 2 || names[0] != "alpha" || names[1] != "zebra" {
 		t.Errorf("ServerNames = %v, want [alpha zebra]", names)
+	}
+}
+
+// A tilde in storage.dir must be expanded at load time. Left as a literal
+// string it becomes a path relative to the working directory, so snapshots
+// are written to "./~/..." and the dry-run banner prints a location that is
+// not where the data goes.
+func TestStorageDirTildeIsExpandedNotRelative(t *testing.T) {
+	path := writeTemp(t, "bunker.yaml", `
+servers:
+  vps-01:
+    host: 203.0.113.1
+    backup:
+      paths: [/srv/data]
+storage:
+  dir: ~/backupsfromserver
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := filepath.Join(pathexp.Home(), "backupsfromserver")
+	if cfg.Storage.Dir != want {
+		t.Errorf("storage.dir = %q, want %q", cfg.Storage.Dir, want)
+	}
+	if strings.Contains(cfg.Storage.Dir, "~") {
+		t.Errorf("storage.dir still contains a tilde: %q", cfg.Storage.Dir)
+	}
+	if !filepath.IsAbs(cfg.Storage.Dir) {
+		t.Errorf("storage.dir %q is not absolute", cfg.Storage.Dir)
+	}
+}
+
+// An already-relative dir is resolved against the working directory, so the
+// printed path is honest about where snapshots will actually land.
+func TestStorageDirRelativeBecomesAbsolute(t *testing.T) {
+	path := writeTemp(t, "bunker.yaml", `
+servers:
+  vps-01:
+    host: 203.0.113.1
+    backup:
+      paths: [/srv/data]
+storage:
+  dir: ./out/backups
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !filepath.IsAbs(cfg.Storage.Dir) {
+		t.Errorf("storage.dir %q is not absolute", cfg.Storage.Dir)
+	}
+	if filepath.Base(cfg.Storage.Dir) != "backups" {
+		t.Errorf("storage.dir = %q, want it to end in backups", cfg.Storage.Dir)
 	}
 }

@@ -110,12 +110,11 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 // pull streams one artifact off the server: zstd-compress, age-encrypt, write
 // to disk, then checksum the stored file.
 func pull(ctx context.Context, client *sshx.Client, art Artifact, dir string, recipient *age.X25519Recipient, logf func(string, ...any)) (ArtifactEntry, error) {
-	proc, err := client.Exec(ctx, art.Command())
-	if err != nil {
-		return ArtifactEntry{}, err
-	}
-	defer proc.Kill()
-
+	// Everything that can fail locally is set up *before* the remote command
+	// starts. Once Exec returns, the remote side is already writing into the
+	// SSH stdout pipe; if we then failed on a local error we would have to
+	// tear the process down mid-stream, and pg_dump can block writing into a
+	// full pipe that nothing is draining.
 	rel := art.FilePath()
 	full := filepath.Join(dir, rel)
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -138,6 +137,15 @@ func pull(ctx context.Context, client *sshx.Client, art Artifact, dir string, re
 		f.Close()
 		return ArtifactEntry{}, fmt.Errorf("zstd encoder: %w", err)
 	}
+
+	proc, err := client.Exec(ctx, art.Command())
+	if err != nil {
+		zw.Close()
+		encW.Close()
+		f.Close()
+		return ArtifactEntry{}, err
+	}
+	defer proc.Kill()
 
 	start := time.Now()
 	_, err = io.Copy(zw, proc.Out)

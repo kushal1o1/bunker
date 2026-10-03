@@ -87,11 +87,49 @@ func loadKey(path, passphrase string) (ssh.Signer, error) {
 	return signer, nil
 }
 
+// maxStderr bounds how much remote stderr is buffered for an error message.
+// The buffer is only ever read when a command fails, and a chatty command
+// must not be able to grow it without limit.
+const maxStderr = 64 << 10
+
+// limitedBuffer keeps the first maxStderr bytes and discards the rest, so a
+// runaway remote command cannot exhaust memory while still reporting why it
+// failed.
+type limitedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	dropped   int
+	truncated bool
+}
+
+func (l *limitedBuffer) Write(p []byte) (int, error) {
+	if room := l.limit - l.buf.Len(); room > 0 {
+		if len(p) > room {
+			l.buf.Write(p[:room])
+			l.dropped = len(p) - room
+			l.truncated = true
+			return len(p), nil
+		}
+		l.buf.Write(p)
+		return len(p), nil
+	}
+	l.dropped += len(p)
+	l.truncated = true
+	return len(p), nil
+}
+
+func (l *limitedBuffer) String() string {
+	if !l.truncated {
+		return l.buf.String()
+	}
+	return l.buf.String() + fmt.Sprintf("\n... [%d more bytes of remote stderr truncated]", l.dropped)
+}
+
 type Process struct {
 	ctx    context.Context
 	sess   *ssh.Session
 	Out    io.Reader
-	stderr bytes.Buffer
+	stderr limitedBuffer
 	errCh  chan error
 }
 
@@ -109,12 +147,6 @@ func (c *Client) Exec(ctx context.Context, command string) (*Process, error) {
 		sess.Close()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	sess.Stderr = &bytes.Buffer{}
-
-	if err := sess.Start(command); err != nil {
-		sess.Close()
-		return nil, fmt.Errorf("start remote command: %w", err)
-	}
 
 	p := &Process{
 		ctx:   ctx,
@@ -122,6 +154,17 @@ func (c *Client) Exec(ctx context.Context, command string) (*Process, error) {
 		Out:   out,
 		errCh: make(chan error, 1),
 	}
+	p.stderr.limit = maxStderr
+	// Must point at the Process field: a throwaway buffer here would discard
+	// every diagnostic a failing remote command emits, which is the only
+	// clue about why it failed.
+	p.sess.Stderr = &p.stderr
+
+	if err := sess.Start(command); err != nil {
+		sess.Close()
+		return nil, fmt.Errorf("start remote command: %w", err)
+	}
+
 	go func() {
 		p.errCh <- sess.Wait()
 	}()
