@@ -2,7 +2,7 @@ package backup
 
 import "fmt"
 
-func humanBytes(n int64) string {
+func HumanBytes(n int64) string {
 	f := float64(n)
 	for _, unit := range []string{"B", "KB", "MB", "GB", "TB"} {
 		if f < 1024 || unit == "TB" {
