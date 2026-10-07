@@ -97,7 +97,7 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 	}
 
 	if r.Logf != nil {
-		r.Logf("  snapshot %s (%s)", snapshot, humanBytes(totalSize(man.Artifacts)))
+		r.Logf("  snapshot %s (%s)", snapshot, HumanBytes(totalSize(man.Artifacts)))
 	}
 	return &Result{
 		Server:    serverName,
@@ -172,9 +172,12 @@ func pull(ctx context.Context, client *sshx.Client, art Artifact, dir string, re
 		return ArtifactEntry{}, err
 	}
 
-	sum, size := hashFile(full)
+	sum, size, err := hashFile(full)
+	if err != nil {
+		return ArtifactEntry{}, fmt.Errorf("checksum stored artifact: %w", err)
+	}
 	if logf != nil {
-		logf("  ok %-46s %6s  %s", art.ID(), humanBytes(size), time.Since(start).Round(time.Millisecond))
+		logf("  ok %-46s %6s  %s", art.ID(), HumanBytes(size), time.Since(start).Round(time.Millisecond))
 	}
 	return ArtifactEntry{
 		ID:     art.ID(),
@@ -184,15 +187,24 @@ func pull(ctx context.Context, client *sshx.Client, art Artifact, dir string, re
 	}, nil
 }
 
-func hashFile(path string) ([]byte, int64) {
+// hashFile returns the SHA-256 and byte length of path.
+//
+// Errors are returned rather than swallowed: the previous version handed back
+// nil on failure, which pull then hex-encoded into an empty string and wrote
+// into manifest.json - a snapshot that looked valid to anything trusting its
+// own recorded checksum.
+func hashFile(path string) ([]byte, int64, error) {
 	h := sha256.New()
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, 0
+		return nil, 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	n, _ := io.Copy(h, f)
-	return h.Sum(nil), n
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return nil, n, fmt.Errorf("hash %s: %w", path, err)
+	}
+	return h.Sum(nil), n, nil
 }
 
 func totalSize(arts []ArtifactEntry) int64 {
