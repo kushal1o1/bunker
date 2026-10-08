@@ -1,6 +1,6 @@
 # bunker
 
-bunker is a Go control plane for backing up multiple VPS. It SSHes into your
+bunker is a Go control/`orchestration:)` plane/`agent:)` for backing up multiple Server/VPS. It SSHes into your
 server, runs `pg_dump -Fc` and `tar -cf -`, streams their stdout back to your
 machine, then compresses (zstd), encrypts (age) and writes to local storage
 with a SHA-256 per artifact in `manifest.json`.
