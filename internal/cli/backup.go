@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -17,7 +18,7 @@ func newBackupCmd() *cobra.Command {
 		Use:   "backup",
 		Short: "manage backups",
 	}
-	cmd.AddCommand(newBackupRunCmd())
+	cmd.AddCommand(newBackupRunCmd(), newBackupVerifyCmd())
 	return cmd
 }
 
@@ -110,4 +111,128 @@ func printPlan(cfg *config.Config, targets []string) error {
 	fmt.Println("Storage: " + cfg.Storage.Dir)
 	fmt.Println("Encryption identity: " + cfg.Encryption.Identity)
 	return nil
+}
+
+func newBackupVerifyCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "verify <server> <snapshot>",
+		Short: "verify a snapshot's checksums, archive integrity and decryption",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runVerify(cmd, args)
+		},
+	}
+	return cmd
+}
+
+// runVerify needs no network: it reads the stored snapshot, checks each
+// artifact against the manifest's size and SHA-256, then decrypts and
+// decompresses every artifact to prove the archive is genuinely readable.
+func runVerify(cmd *cobra.Command, args []string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+
+	server, snapshot := args[0], args[1]
+	verifier := &backup.Verifier{
+		Cfg:  cfg,
+		Logf: func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
+	}
+	fmt.Printf("Verifying %s/%s\n", server, snapshot)
+
+	res, err := verifier.Verify(cmd.Context(), server, snapshot)
+	if err != nil {
+		return err
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "  ARTIFACT\tSIZE\tSHA256\tDECRYPT")
+	for _, a := range res.Artifacts {
+		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", a.Entry.File, verifySize(a), verifySum(a), verifyDecrypt(a))
+	}
+	if res.NoKey {
+		fmt.Fprintf(w, "\n  NO KEY: manifest recipient %s != local identity %s\n", res.Recipient, res.KeyID)
+	}
+	n := countReadable(res)
+	verb := "OK"
+	if !res.OK() {
+		verb = "FAILED"
+	}
+	fmt.Fprintf(w, "\n  verified %d/%d artifact(s) — %s %s\n", n, len(res.Artifacts), res.Snapshot, verb)
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	if res.OK() {
+		return nil
+	}
+	// FAILED or NO KEY: spell out each reason so the exit code is not a
+	// mystery. Size and hash mismatches pass no error around (they are
+	// verdicts, not I/O failures), so they are explained from flags here.
+	for _, a := range res.Artifacts {
+		switch {
+		case a.Err != nil:
+			fmt.Printf("  FAIL %s: %v\n", a.Entry.File, a.Err)
+		case !a.SizeOK:
+			fmt.Printf("  FAIL %s: size mismatch\n", a.Entry.File)
+		case !a.SumOK:
+			fmt.Printf("  FAIL %s: sha256 mismatch\n", a.Entry.File)
+		case !a.NoKey && !a.DecryptOK:
+			fmt.Printf("  FAIL %s: decrypt failed\n", a.Entry.File)
+		}
+	}
+	return fmt.Errorf("verify failed: %d/%d artifact(s) readable", n, len(res.Artifacts))
+}
+
+// verifySize renders the SIZE column: the recorded size, MISSING when the
+// file is gone, FAIL when its length differs from the manifest.
+func verifySize(a backup.ArtifactStatus) string {
+	if a.Err != nil && errors.Is(a.Err, fs.ErrNotExist) {
+		return "MISSING"
+	}
+	if a.SizeOK {
+		return backup.HumanBytes(a.Entry.Size)
+	}
+	return "FAIL"
+}
+
+// verifySum renders the SHA256 column. A hash is only computed on a file
+// whose size already matched the manifest; everything else gets a dash.
+func verifySum(a backup.ArtifactStatus) string {
+	switch {
+	case a.Err != nil || !a.SizeOK:
+		return "-"
+	case a.SumOK:
+		return "ok"
+	default:
+		return "FAIL"
+	}
+}
+
+// verifyDecrypt renders the DECRYPT column.
+func verifyDecrypt(a backup.ArtifactStatus) string {
+	switch {
+	case a.NoKey:
+		return "NO KEY"
+	case a.Err != nil:
+		return "SKIP"
+	case a.DecryptOK:
+		return "ok"
+	default:
+		return "FAIL"
+	}
+}
+
+// countReadable counts artifacts that passed every check, including decrypt.
+// A NO KEY artifact is never readable: verification exists to prove that the
+// data can be read back.
+func countReadable(res *backup.VerifyResult) int {
+	n := 0
+	for _, a := range res.Artifacts {
+		if a.SizeOK && a.SumOK && a.DecryptOK {
+			n++
+		}
+	}
+	return n
 }
