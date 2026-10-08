@@ -19,6 +19,7 @@ Every command that reads config accepts `-c`. Paths inside the config support
 | `bunker keygen [--force]` | generate the age encryption identity |
 | `bunker server list` | show configured servers |
 | `bunker backup run [server...]` | run a backup |
+| `bunker backup verify <server> <snapshot>` | verify a snapshot's checksums, archive integrity and decryption |
 | `bunker completion <shell>` | generate a shell completion script |
 | `bunker help [command]` | cobra help |
 
