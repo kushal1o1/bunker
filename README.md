@@ -13,6 +13,9 @@ flowchart LR
 The private key never leaves your machine, and the server only ever runs two
 read-only commands.
 
+Full documentation: <https://kushal1o1.github.io/bunker/> - walkthrough, command
+reference, and configuration notes (generated from `docs/`).
+
 ## Build
 
     go build -o bunker ./cmd/bunker
@@ -21,4 +24,10 @@ read-only commands.
 
     ./bunker backup run <server>
 
+## Docs (dev)
 
+Docs are built with MkDocs Material from `docs/`. To work on them locally, in
+your Python venv:
+
+    pip install -r requirements.txt
+    mkdocs serve    # http://127.0.0.1:8000/bunker/
