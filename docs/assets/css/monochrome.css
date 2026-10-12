@@ -1,0 +1,33 @@
+/* Black and white theme: strip all accent color, links, and diagrams. */
+
+[data-md-color-scheme="default"] {
+    --md-primary-fg-color: #000000;
+    --md-accent-fg-color: #333333;
+    --md-typeset-a-color: #000000;
+    --md-typeset-a-color--active: #333333;
+    --md-code-hl-color: #eeeeee;
+}
+
+[data-md-color-scheme="slate"] {
+    --md-primary-fg-color: #000000;
+    --md-accent-fg-color: #dddddd;
+    --md-typeset-a-color: #dddddd;
+    --md-typeset-a-color--active: #ffffff;
+}
+
+/* Images and the mermaid diagram render in grayscale. */
+img,
+.mermaid svg {
+    filter: grayscale(100%);
+}
+
+/* Remove the yellow/orange focus + mark rendering. */
+mark {
+    background: #dddddd;
+    color: #000000;
+}
+
+[data-md-color-scheme="slate"] mark {
+    background: #222222;
+    color: #ffffff;
+}

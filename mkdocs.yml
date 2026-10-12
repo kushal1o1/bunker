@@ -1,0 +1,61 @@
+site_name: bunker
+site_description: Encrypted, verifiable PostgreSQL and file backups over SSH
+site_dir: site
+site_url: https://kushal1o1.github.io/bunker/
+repo_url: https://github.com/kushal1o1/bunker
+edit_uri: blob/main/docs/
+
+# Single source: the real docs live in docs/ and are built into the site.
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      toggle:
+        icon: material/brightness-7
+        name: switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      toggle:
+        icon: material/brightness-4
+        name: switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+
+extra_css:
+  - assets/css/monochrome.css
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Commands: COMMANDS.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+
+validation:
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn
