@@ -1,4 +1,10 @@
-# bunker
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/images/bunker-white.png">
+    <img src="docs/assets/images/bunker-black.png" alt="bunker logo" width="180">
+  </picture>
+</p>
+<h1 align="center">bunker</h1>
 
 bunker is a Go control/`orchestration:)` plane/`agent:)` for backing up multiple Server/VPS. It SSHes into your
 server, runs `pg_dump -Fc` and `tar -cf -`, streams their stdout back to your

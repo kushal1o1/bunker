@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="assets/images/bunker-black.png#only-light" alt="bunker logo" width="160">
+  <img src="assets/images/bunker-white.png#only-dark" alt="bunker logo" width="160">
+</p>
+
 # bunker
 
 bunker backs up PostgreSQL databases and file paths from one or more servers

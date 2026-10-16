@@ -10,6 +10,8 @@ docs_dir: docs
 
 theme:
   name: material
+  logo: assets/images/bunker-white.png
+  favicon: assets/images/favicon.png
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
