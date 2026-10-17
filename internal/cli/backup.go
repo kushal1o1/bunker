@@ -62,7 +62,11 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 	}
 
 	if dryRun {
-		return printPlan(cfg, targets)
+		if err := printPlan(cfg, targets); err != nil {
+			return err
+		}
+		printHint(cmd, nextRun(targets, runAll))
+		return nil
 	}
 	// Here we attach pipeline runner
 	runner := &backup.Runner{
@@ -70,6 +74,7 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 		Logf: func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	}
 
+	var last *backup.Result
 	for _, name := range targets {
 		fmt.Printf("Backing up %s (%s)\n", name, cfg.Servers[name].Host)
 		res, err := runner.Run(cmd.Context(), name)
@@ -78,6 +83,12 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 		}
 		fmt.Printf("  done: %s\n", res.Dir)
 		fmt.Println()
+		last = res
+	}
+	// One snapshot gets one hint; a multi-server run stays quiet rather than
+	// printing a list.
+	if len(targets) == 1 && last != nil {
+		printHint(cmd, nextVerify(last.Server, last.Snapshot))
 	}
 	return nil
 }
