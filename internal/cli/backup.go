@@ -18,16 +18,105 @@ func newBackupCmd() *cobra.Command {
 		Use:   "backup",
 		Short: "manage backups",
 	}
-	cmd.AddCommand(newBackupRunCmd(), newBackupVerifyCmd())
+	cmd.AddCommand(newBackupRunCmd(), newBackupListCmd(), newBackupVerifyCmd())
 	return cmd
+}
+
+func newBackupListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list [server...]",
+		Short: "list stored snapshots (all servers when none given)",
+		Long: `List the snapshots in local storage for each server, newest first, with
+their size and status. Reads storage only: no network and no key needed.
+"complete" means the manifest is valid, not that the snapshot was verified.`,
+		Example: `  # every configured server
+  bunker backup list
+
+  # one or more servers
+  bunker backup list my-vps web-01`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runList(args)
+		},
+	}
+}
+
+// runList reads local storage only: no network and no key.
+func runList(args []string) error {
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+
+	targets := args
+	if len(targets) == 0 {
+		targets = cfg.ServerNames()
+	}
+	for _, name := range targets {
+		if _, ok := cfg.Servers[name]; !ok {
+			return fmt.Errorf("unknown server %q (try: bunker server list)", name)
+		}
+	}
+
+	for i, name := range targets {
+		if i > 0 {
+			fmt.Println()
+		}
+		snaps, err := backup.ListSnapshots(cfg.Storage.Dir, name)
+		if err != nil {
+			return err
+		}
+		if len(snaps) == 0 {
+			fmt.Printf("%s: no snapshots\n", name)
+			continue
+		}
+
+		var total int64
+		for _, s := range snaps {
+			total += s.Size()
+		}
+		plural := "s"
+		if len(snaps) == 1 {
+			plural = ""
+		}
+		fmt.Printf("%s (%d snapshot%s, %s)\n", name, len(snaps), plural, backup.HumanBytes(total))
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "  SNAPSHOT\tCREATED (UTC)\tARTIFACTS\tSIZE\tSTATUS")
+		for _, s := range snaps {
+			created, count, size := "-", "-", "-"
+			if s.Status == backup.Complete {
+				created = s.Created.Format("2006-01-02 15:04:05")
+				count = fmt.Sprint(len(s.Manifest.Artifacts))
+				size = backup.HumanBytes(s.Size())
+			}
+			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n", s.ID, created, count, size, s.Status)
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func newBackupRunCmd() *cobra.Command {
 	var runAll, dryRun bool
 	cmd := &cobra.Command{
-		Use:   "run",
+		Use:   "run [server...]",
 		Short: "run backup for one or all servers",
-		Args:  cobra.ArbitraryArgs,
+		Long: `Take a new snapshot of each server. bunker connects over SSH, runs only
+pg_dump and tar (read-only), then compresses, encrypts and writes every
+artifact to local storage with a SHA-256 in manifest.json. Ctrl-C deletes
+the partial snapshot. --dry-run prints the plan without connecting.`,
+		Example: `  # preview what would be backed up, no SSH
+  bunker backup run my-vps --dry-run
+
+  # back up one server
+  bunker backup run my-vps
+
+  # back up every configured server
+  bunker backup run --all`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBackup(cmd, args, runAll, dryRun)
 		},
@@ -128,7 +217,14 @@ func newBackupVerifyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "verify <server> <snapshot>",
 		Short: "verify a snapshot's checksums, archive integrity and decryption",
-		Args:  cobra.ExactArgs(2),
+		Long: `Check one stored snapshot without touching the network: every artifact
+must exist at its recorded size, match its SHA-256, and fully decrypt and
+decompress with your age identity. Exits 0 only when every check passes.
+NO KEY means the snapshot was encrypted to a different key, not corruption.`,
+		Example: `  # find a snapshot, then verify it
+  bunker backup list my-vps
+  bunker backup verify my-vps 2026-10-17T09-12-03`,
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runVerify(cmd, args)
 		},
@@ -170,7 +266,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	if !res.OK() {
 		verb = "FAILED"
 	}
-	fmt.Fprintf(w, "\n  verified %d/%d artifact(s) — %s %s\n", n, len(res.Artifacts), res.Snapshot, verb)
+	fmt.Fprintf(w, "\n  verified %d/%d artifact(s) - %s %s\n", n, len(res.Artifacts), res.Snapshot, verb)
 	if err := w.Flush(); err != nil {
 		return err
 	}
