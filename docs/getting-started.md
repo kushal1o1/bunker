@@ -56,6 +56,9 @@ encryption:
   identity: ~/.config/bunker/key.txt
 ```
 
+See [Configuring bunker.yaml](configuration.md) for every field, multiple
+servers and multiple paths.
+
 ## 5. Take a backup
 
 ```bash

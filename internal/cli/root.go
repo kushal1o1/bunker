@@ -21,6 +21,7 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().StringVarP(&configPath, "config", "c", "bunker.yaml", "config file path")
+	root.PersistentFlags().BoolVar(&noHints, "no-hints", false, "do not print the suggested next command")
 	root.AddCommand(newServerCmd(), newBackupCmd(), newVersionCmd(), newKeygenCmd())
 	return root
 }
