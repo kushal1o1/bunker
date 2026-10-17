@@ -12,6 +12,10 @@ import (
 
 const ManifestName = "manifest.json"
 
+// snapshotLayout is the time format of snapshot IDs and directory names. It
+// sorts lexically in time order.
+const snapshotLayout = "2006-01-02T15-04-05"
+
 type ArtifactEntry struct {
 	ID     string `json:"id"`
 	File   string `json:"file"`
@@ -28,7 +32,7 @@ type Manifest struct {
 }
 
 func NewSnapshotID(t time.Time) string {
-	return t.UTC().Format("2006-01-02T15-04-05")
+	return t.UTC().Format(snapshotLayout)
 }
 
 func SnapshotDir(storageDir, server, snapshot string) string {

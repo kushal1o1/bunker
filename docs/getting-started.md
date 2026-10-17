@@ -69,7 +69,7 @@ The snapshot is written to `~/backups/my-vps/<timestamp>/`. Each snapshot is a
 directory; nothing is ever overwritten. List your snapshots with:
 
 ```bash
-ls ~/backups/my-vps/
+bunker backup list my-vps
 ```
 
 ## 6. Verify a snapshot

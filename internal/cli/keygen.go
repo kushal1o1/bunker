@@ -13,7 +13,15 @@ func newKeygenCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "keygen",
 		Short: "generate an age encryption identity",
-		Args:  cobra.NoArgs,
+		Long: `Create the age keypair that encrypts every backup, at encryption.identity
+from bunker.yaml (0600). Refuses to overwrite an existing identity. --force
+replaces it, and every snapshot made with the old key becomes undecryptable.`,
+		Example: `  # first-time setup
+  bunker keygen
+
+  # rotate the key (old snapshots can no longer be decrypted)
+  bunker keygen --force`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {

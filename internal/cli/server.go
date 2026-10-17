@@ -27,7 +27,14 @@ func newServerListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "list configured servers",
-		Args:  cobra.NoArgs,
+		Long: `Print every server in bunker.yaml with its host, SSH user and port, and
+what it backs up, after defaults are applied. Reads the config only and
+connects to nothing, so it is the first thing to run when a config is wrong.`,
+		Example: `  bunker server list
+
+  # a different config file
+  bunker -c prod.yaml server list`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()
 			if err != nil {
