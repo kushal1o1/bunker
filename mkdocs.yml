@@ -38,6 +38,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Configuration: configuration.md
+  - Retention: retention.md
   - Commands: COMMANDS.md
 
 plugins:

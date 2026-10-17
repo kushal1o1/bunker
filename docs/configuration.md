@@ -103,9 +103,12 @@ Snapshots are written to `<storage.dir>/<server name>/<timestamp>/`.
 
 | Field | Type | Default | Required | Notes |
 |---|---|---|---|---|
-| `retention.daily` | int | `7` | no | daily snapshots to keep |
-| `retention.weekly` | int | `4` | no | weekly snapshots to keep |
-| `retention.monthly` | int | `6` | no | monthly snapshots to keep |
+| `retention.daily` | int | `7` | no | days to keep the newest snapshot of |
+| `retention.weekly` | int | `4` | no | weeks (Monday to Sunday) to keep the newest snapshot of |
+| `retention.monthly` | int | `6` | no | months to keep the newest snapshot of |
+
+These are used by `bunker retention apply`. Setting a value to `0` means "use the
+default". See [Retention](retention.md) for exactly how the policy decides.
 
 ### concurrency
 
@@ -114,10 +117,9 @@ Snapshots are written to `<storage.dir>/<server name>/<timestamp>/`.
 | `concurrency` | int | `3` | no | must be 1 or more |
 
 !!! note "Not in effect yet"
-    `retention` and `concurrency` are read and validated, but nothing uses
-    them yet: servers are backed up one at a time and old snapshots are never
-    deleted. Setting them now is harmless and keeps your file ready for when
-    they land.
+    `concurrency` is read and validated, but nothing uses it yet: servers are
+    backed up one at a time. Setting it now is harmless and keeps your file
+    ready for when it lands.
 
 ## Multiple servers
 
