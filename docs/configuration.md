@@ -22,6 +22,7 @@ servers:
       port: 22
       key: ~/.ssh/bunker_ed25519
       known_hosts: ~/.ssh/known_hosts
+      connect_timeout: 10s         # give up on a host that does not answer
     backup:
       postgres:
         dbs: [shop_db, blog_db]    # several databases on one server
@@ -32,7 +33,7 @@ servers:
 
   db-01:
     host: db.example.com
-    # no ssh block: user root, port 22, ~/.ssh/id_ed25519, ~/.ssh/known_hosts
+    # no ssh block: user root, port 22, ~/.ssh/id_ed25519, ~/.ssh/known_hosts, 10s timeout
     backup:
       postgres:
         dbs: [analytics]
@@ -70,6 +71,7 @@ It is also the folder name under `storage.dir`.
 | `ssh.port` | int | `22` | no | must be between 1 and 65535 |
 | `ssh.key` | path | `~/.ssh/id_ed25519` | no | private key used to log in |
 | `ssh.known_hosts` | path | `~/.ssh/known_hosts` | no | the server's host key must already be in this file |
+| `ssh.connect_timeout` | duration | `10s` | no | how long to wait for the server to answer, for the TCP connect and again for the SSH handshake; write it with a unit (`30s`, `1m`), at least `1s` |
 | `backup.postgres.dbs` | list of strings | | see below | databases to dump with `pg_dump -Fc` |
 | `backup.postgres.user` | string | | no | passed as `pg_dump -U` |
 | `backup.postgres.host` | string | | no | passed as `pg_dump -h`; leave empty to use the local socket |
@@ -114,12 +116,7 @@ default". See [Retention](retention.md) for exactly how the policy decides.
 
 | Field | Type | Default | Required | Notes |
 |---|---|---|---|---|
-| `concurrency` | int | `3` | no | must be 1 or more |
-
-!!! note "Not in effect yet"
-    `concurrency` is read and validated, but nothing uses it yet: servers are
-    backed up one at a time. Setting it now is harmless and keeps your file
-    ready for when it lands.
+| `concurrency` | int | `3` | no | how many servers `backup run` backs up at the same time; must be 1 or more |
 
 ## Multiple servers
 
@@ -201,6 +198,33 @@ backup:
 All databases on one server share the same `user`, `host` and `port`
 overrides.
 
+## Timeouts
+
+A host that does not exist by name fails at once (`no such host`), and a
+machine with port 22 closed fails at once (`connection refused`). A wrong IP,
+a machine that is down, or a firewall that silently drops packets never
+answers at all, so bunker waits `ssh.connect_timeout` (10s by default) and then
+reports:
+
+```
+ssh root@203.0.113.99:22: no response after 10s (host down, wrong IP, or a firewall dropping packets)
+```
+
+The same timeout covers the SSH handshake: a port that accepts the connection
+but has no SSH server behind it fails with `no SSH handshake within 10s`
+instead of hanging. Other servers in the same run are not held up, and
+`Ctrl-C` stops a pending connect immediately.
+
+Raise it for servers on slow or distant links:
+
+```yaml
+servers:
+  far-away:
+    host: 198.51.100.7
+    ssh:
+      connect_timeout: 30s
+```
+
 ## Validation rules
 
 bunker refuses to start when:
@@ -208,6 +232,7 @@ bunker refuses to start when:
 - `servers` is empty
 - a server has no `host`
 - `ssh.port` is outside 1 to 65535
+- `ssh.connect_timeout` is less than `1s`, or a number without a unit
 - a server has neither `postgres.dbs` nor `paths`
 - a database name or a path is an empty string
 - `concurrency` is less than 1

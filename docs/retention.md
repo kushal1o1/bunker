@@ -85,14 +85,14 @@ Policy: daily 7, weekly 4, monthly 6
 
 my-vps: keep 4, delete 1
   SNAPSHOT             SIZE    ACTION  WHY
-  2026-10-17T18-00-00  42 MiB  keep    daily 1, weekly 1, monthly 1
-  2026-10-17T06-00-00  42 MiB  delete
-  2026-10-16T09-00-00  42 MiB  keep    daily 2
-  2026-10-08T13-32-59  41 MiB  keep    daily 3, weekly 2
-  2026-09-29T17-01-50  40 MiB  keep    daily 4, weekly 3, monthly 2
+  2026-10-17T18-00-00  42.0 MB  keep    daily 1, weekly 1, monthly 1
+  2026-10-17T06-00-00  42.0 MB  delete
+  2026-10-16T09-00-00  42.0 MB  keep    daily 2
+  2026-10-08T13-32-59  41.0 MB  keep    daily 3, weekly 2
+  2026-09-29T17-01-50  40.0 MB  keep    daily 4, weekly 3, monthly 2
   2026-09-20T10-00-00  -       skip    no manifest
 
-Preview only: 1 snapshot(s), 42 MiB would be deleted. Nothing was removed.
+Preview only: 1 snapshot(s), 42.0 MB would be deleted. Nothing was removed.
 
 Next: bunker retention apply my-vps --yes
 ```
