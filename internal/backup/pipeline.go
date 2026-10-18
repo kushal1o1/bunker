@@ -25,14 +25,48 @@ type Result struct {
 }
 
 type Runner struct {
-	Cfg  *config.Config
-	Logf func(format string, args ...any)
+	Cfg *config.Config
+	// Progress receives events as the run advances. It may be nil. With
+	// several servers running at once it is called from several goroutines,
+	// so it must be safe for concurrent use.
+	Progress func(Event)
+}
+
+// EventKind identifies a step of one server's run.
+type EventKind int
+
+const (
+	// Connecting: the run started and is opening the SSH connection.
+	Connecting EventKind = iota
+	// ArtifactStarted: the remote command for one artifact is about to run.
+	ArtifactStarted
+	// ArtifactDone: one artifact is stored and checksummed.
+	ArtifactDone
+)
+
+// Event is one progress update from Runner.Run. Index is 1-based within
+// Total artifacts; Size and Elapsed are set on ArtifactDone.
+type Event struct {
+	Server   string
+	Kind     EventKind
+	Artifact string
+	Index    int
+	Total    int
+	Size     int64
+	Elapsed  time.Duration
+}
+
+func (r *Runner) emit(e Event) {
+	if r.Progress != nil {
+		r.Progress(e)
+	}
 }
 
 // Run pulls a full snapshot from one server into local storage. It only ever
 // executes the allowlisted commands on the remote side and reads their stdout.
 func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 	spec := r.Cfg.Servers[serverName]
+	r.emit(Event{Server: serverName, Kind: Connecting})
 
 	client, err := sshx.Connect(ctx, sshx.Config{
 		Host:       spec.Host,
@@ -40,6 +74,7 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 		User:       spec.SSH.User,
 		KeyPath:    pathexp.Expand(spec.SSH.Key),
 		KnownHosts: pathexp.Expand(spec.SSH.KnownHosts),
+		Timeout:    spec.SSH.ConnectTimeout,
 	})
 	if err != nil {
 		return nil, err
@@ -73,20 +108,24 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 		Artifacts: nil,
 	}
 
+	arts := buildArtifacts(spec)
 	var errOut error
-	for _, art := range buildArtifacts(spec) {
+	for i, art := range arts {
 		select {
 		case <-ctx.Done():
 			return fail(ctx.Err())
 		default:
 		}
 
-		entry, err := pull(ctx, client, art, dir, recipient, r.Logf)
+		r.emit(Event{Server: serverName, Kind: ArtifactStarted, Artifact: art.ID(), Index: i + 1, Total: len(arts)})
+		start := time.Now()
+		entry, err := pull(ctx, client, art, dir, recipient)
 		if err != nil {
 			errOut = fmt.Errorf("%s: %w", art.ID(), err)
 			break
 		}
 		man.Artifacts = append(man.Artifacts, entry)
+		r.emit(Event{Server: serverName, Kind: ArtifactDone, Artifact: art.ID(), Index: i + 1, Total: len(arts), Size: entry.Size, Elapsed: time.Since(start)})
 	}
 	if errOut != nil {
 		return fail(errOut)
@@ -96,9 +135,6 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 		return fail(fmt.Errorf("write manifest: %w", err))
 	}
 
-	if r.Logf != nil {
-		r.Logf("  snapshot %s (%s)", snapshot, HumanBytes(totalSize(man.Artifacts)))
-	}
 	return &Result{
 		Server:    serverName,
 		Snapshot:  snapshot,
@@ -109,7 +145,7 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 
 // pull streams one artifact off the server: zstd-compress, age-encrypt, write
 // to disk, then checksum the stored file.
-func pull(ctx context.Context, client *sshx.Client, art Artifact, dir string, recipient *age.X25519Recipient, logf func(string, ...any)) (ArtifactEntry, error) {
+func pull(ctx context.Context, client *sshx.Client, art Artifact, dir string, recipient *age.X25519Recipient) (ArtifactEntry, error) {
 	// Everything that can fail locally is set up *before* the remote command
 	// starts. Once Exec returns, the remote side is already writing into the
 	// SSH stdout pipe; if we then failed on a local error we would have to
@@ -147,7 +183,6 @@ func pull(ctx context.Context, client *sshx.Client, art Artifact, dir string, re
 	}
 	defer proc.Kill()
 
-	start := time.Now()
 	_, err = io.Copy(zw, proc.Out)
 	if err != nil {
 		zw.Close()
@@ -175,9 +210,6 @@ func pull(ctx context.Context, client *sshx.Client, art Artifact, dir string, re
 	sum, size, err := hashFile(full)
 	if err != nil {
 		return ArtifactEntry{}, fmt.Errorf("checksum stored artifact: %w", err)
-	}
-	if logf != nil {
-		logf("  ok %-46s %6s  %s", art.ID(), HumanBytes(size), time.Since(start).Round(time.Millisecond))
 	}
 	return ArtifactEntry{
 		ID:     art.ID(),

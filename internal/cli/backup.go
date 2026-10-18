@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/kushal1o1/bunker/internal/backup"
 	"github.com/kushal1o1/bunker/internal/config"
@@ -106,8 +107,10 @@ func newBackupRunCmd() *cobra.Command {
 		Short: "run backup for one or all servers",
 		Long: `Take a new snapshot of each server. bunker connects over SSH, runs only
 pg_dump and tar (read-only), then compresses, encrypts and writes every
-artifact to local storage with a SHA-256 in manifest.json. Ctrl-C deletes
-the partial snapshot. --dry-run prints the plan without connecting.`,
+artifact to local storage with a SHA-256 in manifest.json. Up to
+"concurrency" servers run at once, every server is attempted even if one
+fails, and the exit code is non-zero if any failed. Ctrl-C deletes partial
+snapshots. --dry-run prints the plan without connecting.`,
 		Example: `  # preview what would be backed up, no SSH
   bunker backup run my-vps --dry-run
 
@@ -141,7 +144,7 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 	case len(args) == 0:
 		return errors.New("missing target: supply a server name or --all")
 	default:
-		targets = args
+		targets = dedupe(args)
 	}
 
 	for _, name := range targets {
@@ -157,29 +160,57 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 		printHint(cmd, nextRun(targets, runAll))
 		return nil
 	}
-	// Here we attach pipeline runner
-	runner := &backup.Runner{
-		Cfg:  cfg,
-		Logf: func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
+
+	// Live table on a terminal; one line per event for cron and pipes.
+	var view progressView
+	if isTerminal() {
+		view = newLiveTable(cmd.ErrOrStderr(), targets)
+	} else {
+		hosts := make(map[string]string, len(targets))
+		for _, name := range targets {
+			hosts[name] = cfg.Servers[name].Host
+		}
+		view = newLineLog(cmd.OutOrStdout(), hosts)
 	}
 
-	var last *backup.Result
-	for _, name := range targets {
-		fmt.Printf("Backing up %s (%s)\n", name, cfg.Servers[name].Host)
-		res, err := runner.Run(cmd.Context(), name)
-		if err != nil {
-			return err
+	runner := &backup.Runner{Cfg: cfg, Progress: view.Event}
+	start := time.Now()
+	results := backup.RunMany(cmd.Context(), runner, targets, cfg.Concurrency, view.Done)
+	view.Close()
+
+	if err := printSummary(cmd.OutOrStdout(), results, time.Since(start)); err != nil {
+		return err
+	}
+
+	failed := 0
+	for _, r := range results {
+		if r.Err != nil {
+			failed++
 		}
-		fmt.Printf("  done: %s\n", res.Dir)
-		fmt.Println()
-		last = res
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d server(s) failed", failed, len(results))
 	}
 	// One snapshot gets one hint; a multi-server run stays quiet rather than
 	// printing a list.
-	if len(targets) == 1 && last != nil {
-		printHint(cmd, nextVerify(last.Server, last.Snapshot))
+	if len(results) == 1 {
+		printHint(cmd, nextVerify(results[0].Server, results[0].Result.Snapshot))
 	}
 	return nil
+}
+
+// dedupe drops repeated server names, keeping first-seen order. Two runs of
+// one server in the same second would write the same snapshot directory.
+func dedupe(names []string) []string {
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 func printPlan(cfg *config.Config, targets []string) error {
