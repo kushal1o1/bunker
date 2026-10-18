@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kushal1o1/bunker/internal/pathexp"
 )
@@ -195,5 +196,48 @@ storage:
 	}
 	if filepath.Base(cfg.Storage.Dir) != "backups" {
 		t.Errorf("storage.dir = %q, want it to end in backups", cfg.Storage.Dir)
+	}
+}
+
+func TestConnectTimeout(t *testing.T) {
+	cases := []struct {
+		name    string
+		line    string // under ssh:, empty for none
+		want    time.Duration
+		wantErr string
+	}{
+		{name: "default", want: DefaultSSHTimeout},
+		{name: "custom", line: "connect_timeout: 5s", want: 5 * time.Second},
+		{name: "minutes", line: "connect_timeout: 1m", want: time.Minute},
+		{name: "bare number", line: "connect_timeout: 10", wantErr: "cannot unmarshal !!int `10` into time.Duration"},
+		{name: "too small", line: "connect_timeout: 500ms", wantErr: "at least 1s"},
+		{name: "not a duration", line: "connect_timeout: soon", wantErr: "parse config"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTemp(t, "bunker.yaml", `
+servers:
+  vps-01:
+    host: 203.0.113.10
+    ssh:
+      user: bunker
+      `+tc.line+`
+    backup:
+      paths: [/srv/data]
+`)
+			cfg, err := Load(path)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := cfg.Servers["vps-01"].SSH.ConnectTimeout; got != tc.want {
+				t.Errorf("connect_timeout = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
