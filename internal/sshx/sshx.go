@@ -3,6 +3,7 @@ package sshx
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,7 +24,13 @@ type Config struct {
 	KnownHosts string
 	// Passphrase for an encrypted private key. Empty for unencrypted keys.
 	Passphrase string
+	// Timeout bounds the TCP connect and the SSH handshake, separately.
+	// Zero means DefaultTimeout.
+	Timeout time.Duration
 }
+
+// DefaultTimeout is used when Config.Timeout is zero.
+const DefaultTimeout = 10 * time.Second
 
 type Client struct {
 	conn *ssh.Client
@@ -35,6 +42,9 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	if cfg.Port == 0 {
 		cfg.Port = 22
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = DefaultTimeout
 	}
 
 	key, err := loadKey(cfg.KeyPath, cfg.Passphrase)
@@ -54,18 +64,49 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	dialer := net.Dialer{Timeout: 30 * time.Second}
+	where := cfg.User + "@" + addr
+
+	dialer := net.Dialer{Timeout: cfg.Timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("ssh %s@%s: %w", cfg.User, addr, err)
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("ssh %s: %w", where, ctx.Err())
+		}
+		if isTimeout(err) {
+			return nil, fmt.Errorf("ssh %s: no response after %s (host down, wrong IP, or a firewall dropping packets)", where, cfg.Timeout)
+		}
+		return nil, fmt.Errorf("ssh %s: %w", where, err)
 	}
 
+	// x/crypto/ssh has no context support, so the handshake is bounded two
+	// ways: a deadline on the socket for a peer that accepts the connection
+	// but never speaks SSH, and closing the socket if ctx is cancelled
+	// (Ctrl-C) mid-handshake. Both are lifted once the handshake is done.
+	conn.SetDeadline(time.Now().Add(cfg.Timeout))
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+
 	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, clientCfg)
+	if !stop() {
+		// ctx was cancelled and the socket is already closed.
+		if sshConn != nil {
+			sshConn.Close()
+		}
+		return nil, fmt.Errorf("ssh %s: %w", where, ctx.Err())
+	}
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("ssh %s@%s: %w", cfg.User, addr, err)
+		if isTimeout(err) {
+			return nil, fmt.Errorf("ssh %s: connected, but no SSH handshake within %s (is an SSH server listening on this port?)", where, cfg.Timeout)
+		}
+		return nil, fmt.Errorf("ssh %s: %w", where, err)
 	}
+	conn.SetDeadline(time.Time{})
 	return &Client{conn: ssh.NewClient(sshConn, chans, reqs)}, nil
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 func loadKey(path, passphrase string) (ssh.Signer, error) {

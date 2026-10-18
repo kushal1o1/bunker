@@ -6,12 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
@@ -226,5 +228,98 @@ func writeKnownHost(t *testing.T, path, addr string, key ssh.PublicKey) {
 	line := knownhosts.Normalize(addr) + " " + key.Type() + " " + base64.StdEncoding.EncodeToString(key.Marshal())
 	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
 		t.Fatalf("write known_hosts: %v", err)
+	}
+}
+
+// silentListener accepts TCP connections and never says a word, like a port
+// that is open but has no SSH server behind it.
+func silentListener(t *testing.T) (port int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// clientFiles writes a client key and an empty known_hosts; the handshake
+// never gets far enough to check either.
+func clientFiles(t *testing.T) (keyPath, knownHosts string) {
+	t.Helper()
+	_, priv, err := generateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath = filepath.Join(t.TempDir(), "id_ed25519")
+	if err := os.WriteFile(keyPath, encodePEM(kb), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	knownHosts = filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(knownHosts, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return keyPath, knownHosts
+}
+
+func TestConnectHandshakeTimeout(t *testing.T) {
+	port := silentListener(t)
+	keyPath, kh := clientFiles(t)
+
+	start := time.Now()
+	_, err := Connect(context.Background(), Config{
+		Host: "127.0.0.1", Port: port, User: "bunker",
+		KeyPath: keyPath, KnownHosts: kh, Timeout: 300 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("want handshake timeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "no SSH handshake within 300ms") {
+		t.Errorf("err = %q, want handshake timeout message", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("took %s, want about 300ms", d)
+	}
+}
+
+func TestConnectCancelDuringHandshake(t *testing.T) {
+	port := silentListener(t)
+	keyPath, kh := clientFiles(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+
+	start := time.Now()
+	_, err := Connect(ctx, Config{
+		Host: "127.0.0.1", Port: port, User: "bunker",
+		KeyPath: keyPath, KnownHosts: kh, Timeout: 30 * time.Second,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("took %s after cancel at 200ms; Ctrl-C must not wait for the timeout", d)
+	}
+}
+
+func TestIsTimeout(t *testing.T) {
+	if !isTimeout(&net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}) {
+		t.Error("dial deadline should count as a timeout")
+	}
+	if isTimeout(errors.New("connection refused")) {
+		t.Error("plain error is not a timeout")
 	}
 }
