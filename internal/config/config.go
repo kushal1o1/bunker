@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/kushal1o1/bunker/internal/model"
 	"github.com/kushal1o1/bunker/internal/pathexp"
@@ -15,18 +16,20 @@ import (
 )
 
 const (
-	DefaultConfigPath   = "bunker.yaml"
-	DefaultConcurrency  = 3
-	DefaultPort         = 22
-	DefaultSSHUser      = "root"
-	DefaultSSHKey       = "~/.ssh/id_ed25519"
-	DefaultKnownHosts   = "~/.ssh/known_hosts"
-	DefaultIdentity     = "~/.config/bunker/key.txt"
-	DefaultStorageType  = "local"
-	DefaultStorageDir   = "~/backups"
-	DefaultRetentionD   = 7
-	DefaultRetentionW   = 4
-	DefaultRetentionM   = 6
+	DefaultConfigPath  = "bunker.yaml"
+	DefaultConcurrency = 3
+	DefaultPort        = 22
+	DefaultSSHUser     = "root"
+	DefaultSSHKey      = "~/.ssh/id_ed25519"
+	DefaultKnownHosts  = "~/.ssh/known_hosts"
+	DefaultSSHTimeout  = 10 * time.Second
+	DefaultKeepAlive   = 15 * time.Second
+	DefaultIdentity    = "~/.config/bunker/key.txt"
+	DefaultStorageType = "local"
+	DefaultStorageDir  = "~/backups"
+	DefaultRetentionD  = 7
+	DefaultRetentionW  = 4
+	DefaultRetentionM  = 6
 )
 
 type Config struct {
@@ -101,6 +104,12 @@ func (c *Config) setDefaults() {
 		if s.SSH.KnownHosts == "" {
 			s.SSH.KnownHosts = DefaultKnownHosts
 		}
+		if s.SSH.ConnectTimeout == 0 {
+			s.SSH.ConnectTimeout = DefaultSSHTimeout
+		}
+		if s.SSH.KeepAliveInterval == 0 {
+			s.SSH.KeepAliveInterval = DefaultKeepAlive
+		}
 		c.Servers[name] = s
 	}
 }
@@ -144,6 +153,14 @@ func validateServer(name string, s model.ServerSpec) error {
 	}
 	if s.SSH.Port < 1 || s.SSH.Port > 65535 {
 		return fmt.Errorf("server %q: ssh port out of range: %d", name, s.SSH.Port)
+	}
+	// yaml.v3 already rejects a bare number like "10"; this catches values
+	// written with a unit that are too small to ever connect, like "500ms".
+	if s.SSH.ConnectTimeout < time.Second {
+		return fmt.Errorf("server %q: ssh.connect_timeout must be at least 1s, written with a unit (e.g. 10s, 1m): got %s", name, s.SSH.ConnectTimeout)
+	}
+	if s.SSH.KeepAliveInterval < time.Second {
+		return fmt.Errorf("server %q: ssh.keepalive_interval must be at least 1s, written with a unit (e.g. 15s, 1m): got %s", name, s.SSH.KeepAliveInterval)
 	}
 	if s.Backup.Postgres == nil && len(s.Backup.Paths) == 0 {
 		return fmt.Errorf("server %q: backup must define at least one postgres db or file path", name)

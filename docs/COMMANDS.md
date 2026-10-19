@@ -162,14 +162,36 @@ Storage: /home/you/backups
 Encryption identity: /home/you/.config/bunker/key.txt
 ```
 
-Real run:
+Real run in a terminal: a live table, one row per server, redrawn in place
+(on stderr):
 
 ```
-Backing up my-vps (203.0.113.10)
-  ok postgres/mydb                                     41 MiB  6.2s
-  ok files/var/www/my-project/uploads                  12 MiB  1.8s
-  snapshot 2026-10-17T09-12-03 (53 MiB)
-  done: /home/you/backups/my-vps/2026-10-17T09-12-03
+✓ kaskiserver  done                        2 artifacts  53.0 MB  8.1s
+⟳ web-01       files/var/www/shop/media    2/3                   3.2s
+○ web-02       waiting
+✗ db-01        failed: ssh: dial tcp 10.0.0.5:22: connection refused  1s
+```
+
+Real run from cron or a pipe: one line per event (on stdout), prefixed with the
+server, so the log stays readable when servers run in parallel:
+
+```
+[kaskiserver] connecting 203.0.113.10
+[web-01] connecting 203.0.113.20
+[kaskiserver] ok postgres/mydb 41.0 MB 6.2s
+[db-01] FAILED: ssh: dial tcp 10.0.0.5:22: connection refused
+[kaskiserver] ok files/var/www/my-project/uploads 12.0 MB 1.8s
+[kaskiserver] snapshot 2026-10-17T09-12-03 (53.0 MB) in 8.1s
+```
+
+Both end with a summary:
+
+```
+3/4 backed up in 12.3s
+  ✓ kaskiserver  2026-10-17T09-12-03  53.0 MB
+  ✓ web-01       2026-10-17T09-12-04  20.0 MB
+  ✓ web-02       2026-10-17T09-12-09  7.0 MB
+  ✗ db-01        ssh: dial tcp 10.0.0.5:22: connection refused
 ```
 
 Notes:
@@ -177,12 +199,23 @@ Notes:
 - On the server bunker only runs `pg_dump -Fc` and `tar -cf -` and reads their
   output. Compression, encryption and the SHA-256 checksums happen on your
   machine.
-- Databases are backed up first, then paths, in config order.
-- `Ctrl-C` (or SIGTERM) closes the SSH session and deletes the partial
-  snapshot, so a half-written snapshot never looks complete.
+- Up to `concurrency` servers (from `bunker.yaml`, default 3) are backed up at
+  the same time. Within one server, databases go first, then paths, in config
+  order.
+- Every server is attempted. A failure is reported in the summary and does not
+  stop the others.
+- A server that does not answer fails after `ssh.connect_timeout` (10s by
+  default), and one that freezes mid-backup is dropped after about a minute,
+  instead of hanging the run. See [Timeouts](configuration.md#timeouts).
+- Exit code `0` when every server succeeded, `1` if any failed, so cron or a
+  monitor can alert on it.
+- `Ctrl-C` (or SIGTERM) stops at once, even in the middle of a transfer,
+  closes the SSH connections and deletes the partial
+  snapshots, so a half-written snapshot never looks complete. Servers that had
+  not started yet show as `cancelled`.
+- Naming the same server twice backs it up once.
 - `--all` cannot be combined with server names, and running with neither is an
   error.
-- Servers are backed up one at a time; `concurrency` is not used yet.
 
 ---
 
@@ -202,10 +235,10 @@ bunker backup list my-vps web-01
 No flags.
 
 ```
-my-vps (3 snapshots, 84 MiB)
+my-vps (3 snapshots, 84.0 MB)
   SNAPSHOT             CREATED (UTC)        ARTIFACTS  SIZE    STATUS
-  2026-10-17T09-12-03  2026-10-17 09:12:03  2          42 MiB  complete
-  2026-10-16T09-10-00  2026-10-16 09:10:00  2          42 MiB  complete
+  2026-10-17T09-12-03  2026-10-17 09:12:03  2          42.0 MB  complete
+  2026-10-16T09-10-00  2026-10-16 09:10:00  2          42.0 MB  complete
   2026-10-15T09-00-11  -                    -          -       no manifest
 
 web-01: no snapshots
@@ -241,8 +274,8 @@ Verifying my-vps/2026-10-17T09-12-03
   manifest recipient  age1r7jyfzpdx5x2e70xy8uawy5yx0fk64dfdgxnafkjfsc6eufk64mquw26d2
   local identity      age1r7jyfzpdx5x2e70xy8uawy5yx0fk64dfdgxnafkjfsc6eufk64mquw26d2
   ARTIFACT                                      SIZE    SHA256  DECRYPT
-  postgres/mydb.dump.zst.age                    41 MiB  ok      ok
-  files/var-www-my-project-uploads.tar.zst.age  12 MiB  ok      ok
+  postgres/mydb.dump.zst.age                    41.0 MB  ok      ok
+  files/var-www-my-project-uploads.tar.zst.age  12.0 MB  ok      ok
 
   verified 2/2 artifact(s) - 2026-10-17T09-12-03 OK
 ```
@@ -288,11 +321,11 @@ Policy: daily 7, weekly 4, monthly 6
 
 my-vps: keep 4, delete 1
   SNAPSHOT             SIZE    ACTION  WHY
-  2026-10-17T18-00-00  42 MiB  keep    daily 1, weekly 1, monthly 1
-  2026-10-17T06-00-00  42 MiB  delete
-  2026-10-16T09-00-00  42 MiB  keep    daily 2
+  2026-10-17T18-00-00  42.0 MB  keep    daily 1, weekly 1, monthly 1
+  2026-10-17T06-00-00  42.0 MB  delete
+  2026-10-16T09-00-00  42.0 MB  keep    daily 2
 
-Preview only: 1 snapshot(s), 42 MiB would be deleted. Nothing was removed.
+Preview only: 1 snapshot(s), 42.0 MB would be deleted. Nothing was removed.
 ```
 
 Notes:

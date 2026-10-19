@@ -200,7 +200,7 @@ func loadTestConfig(t *testing.T, path string) *config.Config {
 }
 
 func runnerFor(cfg *config.Config) *backup.Runner {
-	return &backup.Runner{Cfg: cfg, Logf: func(string, ...any) {}}
+	return &backup.Runner{Cfg: cfg}
 }
 
 func decryptDecompress(t *testing.T, artifactPath, identityPath string) []byte {

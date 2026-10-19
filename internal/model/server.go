@@ -1,5 +1,7 @@
 package model
 
+import "time"
+
 type ServerSpec struct {
 	Host   string     `json:"host" yaml:"host"`
 	SSH    SSHConfig  `json:"ssh" yaml:"ssh"`
@@ -12,6 +14,11 @@ type SSHConfig struct {
 	Key  string `json:"key" yaml:"key"`
 	// KnownHosts is the path to the known_hosts file used to verify the server key.
 	KnownHosts string `json:"known_hosts" yaml:"known_hosts"`
+	// ConnectTimeout bounds the TCP connect and the SSH handshake, e.g. "10s".
+	ConnectTimeout time.Duration `json:"connect_timeout,omitempty" yaml:"connect_timeout,omitempty"`
+	// KeepAliveInterval is how often a connected server is checked; after 3
+	// unanswered checks it is treated as dead, e.g. "15s".
+	KeepAliveInterval time.Duration `json:"keepalive_interval,omitempty" yaml:"keepalive_interval,omitempty"`
 }
 
 type BackupSpec struct {
