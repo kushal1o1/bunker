@@ -323,3 +323,161 @@ func TestIsTimeout(t *testing.T) {
 		t.Error("plain error is not a timeout")
 	}
 }
+
+// fakeHost is an SSH server whose exec handler and keepalive replies the test
+// controls. Freezing it stops both, like a host that lost power mid-backup.
+type fakeHost struct {
+	frozen chan struct{} // closed: stop answering anything
+	exec   func(ch ssh.Channel, frozen <-chan struct{})
+}
+
+func (h *fakeHost) start(t *testing.T) Config {
+	t.Helper()
+	hostSigner, _, err := generateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &ssh.ServerConfig{
+		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
+			return &ssh.Permissions{}, nil
+		},
+	}
+	srv.AddHostKey(hostSigner)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		sconn, chans, reqs, err := ssh.NewServerConn(conn, srv)
+		if err != nil {
+			return
+		}
+		t.Cleanup(func() { sconn.Close() })
+		go func() {
+			for req := range reqs {
+				select {
+				case <-h.frozen:
+					// never reply
+				default:
+					if req.WantReply {
+						req.Reply(false, nil) // what OpenSSH says to keepalive@openssh.com
+					}
+				}
+			}
+		}()
+		for nc := range chans {
+			ch, chReqs, err := nc.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				for req := range chReqs {
+					if req.WantReply {
+						req.Reply(req.Type == "exec", nil)
+					}
+					if req.Type == "exec" {
+						go h.exec(ch, h.frozen)
+					}
+				}
+			}()
+		}
+	}()
+
+	keyPath, knownHosts := clientFiles(t)
+	writeKnownHost(t, knownHosts, ln.Addr().String(), hostSigner.PublicKey())
+	return Config{
+		Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port, User: "bunker",
+		KeyPath: keyPath, KnownHosts: knownHosts,
+	}
+}
+
+// readAll runs the command and returns the error from reading stdout, or
+// from Wait if the read succeeded, and how long it took.
+func readAll(t *testing.T, ctx context.Context, cfg Config) (error, time.Duration) {
+	t.Helper()
+	c, err := Connect(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { c.Close() })
+	proc, err := c.Exec(ctx, "cmd")
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	defer proc.Kill()
+
+	start := time.Now()
+	if _, err := io.Copy(io.Discard, proc.Out); err != nil {
+		return err, time.Since(start)
+	}
+	return proc.Wait(), time.Since(start)
+}
+
+// A host that freezes mid-stream must be dropped after a few missed
+// keepalives, not left blocking the read until the OS gives up.
+func TestKeepAliveDropsFrozenServer(t *testing.T) {
+	h := &fakeHost{frozen: make(chan struct{})}
+	h.exec = func(ch ssh.Channel, frozen <-chan struct{}) {
+		io.WriteString(ch, "partial data")
+		close(h.frozen)
+		// then nothing, ever
+	}
+	cfg := h.start(t)
+	cfg.KeepAlive = 100 * time.Millisecond
+
+	err, took := readAll(t, context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "server stopped responding") {
+		t.Fatalf("err = %v, want keepalive failure", err)
+	}
+	if took > 3*time.Second {
+		t.Errorf("took %s, want about 4 keepalive intervals", took)
+	}
+}
+
+// A command that is silent for a long time (pg_dump on a big table) on a host
+// that is alive must not be cut off: sshd still answers keepalives.
+func TestKeepAliveKeepsSlowCommand(t *testing.T) {
+	h := &fakeHost{frozen: make(chan struct{})}
+	h.exec = func(ch ssh.Channel, _ <-chan struct{}) {
+		time.Sleep(800 * time.Millisecond) // 8 keepalive intervals of silence
+		io.WriteString(ch, "done")
+		ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+		ch.Close()
+	}
+	cfg := h.start(t)
+	cfg.KeepAlive = 100 * time.Millisecond
+
+	if err, _ := readAll(t, context.Background(), cfg); err != nil {
+		t.Fatalf("slow but alive command failed: %v", err)
+	}
+}
+
+// Ctrl-C while data is streaming must stop the read at once and say why,
+// even if the server is frozen and would never close the session itself.
+func TestCancelDuringStream(t *testing.T) {
+	h := &fakeHost{frozen: make(chan struct{})}
+	h.exec = func(ch ssh.Channel, _ <-chan struct{}) {
+		io.WriteString(ch, "partial data")
+		close(h.frozen)
+	}
+	cfg := h.start(t)
+	cfg.KeepAlive = time.Minute // keepalive must not be what ends this
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+
+	err, took := readAll(t, ctx, cfg)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if took > 3*time.Second {
+		t.Errorf("took %s after cancel at 200ms", took)
+	}
+}

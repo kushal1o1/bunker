@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -27,13 +28,29 @@ type Config struct {
 	// Timeout bounds the TCP connect and the SSH handshake, separately.
 	// Zero means DefaultTimeout.
 	Timeout time.Duration
+	// KeepAlive is how often the server is asked to prove it is still there
+	// once connected. Zero means DefaultKeepAlive.
+	KeepAlive time.Duration
 }
 
-// DefaultTimeout is used when Config.Timeout is zero.
-const DefaultTimeout = 10 * time.Second
+const (
+	// DefaultTimeout is used when Config.Timeout is zero.
+	DefaultTimeout = 10 * time.Second
+	// DefaultKeepAlive is used when Config.KeepAlive is zero.
+	DefaultKeepAlive = 15 * time.Second
+	// keepAliveMax unanswered keepalives in a row mark the server dead.
+	keepAliveMax = 3
+)
 
 type Client struct {
-	conn *ssh.Client
+	conn  *ssh.Client
+	where string
+
+	done      chan struct{}
+	closeOnce sync.Once
+
+	mu   sync.Mutex
+	dead error // set when keepalives went unanswered
 }
 
 func Connect(ctx context.Context, cfg Config) (*Client, error) {
@@ -45,6 +62,9 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = DefaultTimeout
+	}
+	if cfg.KeepAlive <= 0 {
+		cfg.KeepAlive = DefaultKeepAlive
 	}
 
 	key, err := loadKey(cfg.KeyPath, cfg.Passphrase)
@@ -101,7 +121,60 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("ssh %s: %w", where, err)
 	}
 	conn.SetDeadline(time.Time{})
-	return &Client{conn: ssh.NewClient(sshConn, chans, reqs)}, nil
+
+	c := &Client{conn: ssh.NewClient(sshConn, chans, reqs), where: where, done: make(chan struct{})}
+	go c.keepAlive(cfg.KeepAlive)
+	return c, nil
+}
+
+// keepAlive sends an OpenSSH keepalive every interval. Any reply counts, even
+// "unsupported": it proves the host and sshd are alive. After keepAliveMax
+// ticks with a request still unanswered, the connection is closed, which
+// unblocks any read waiting on a server that froze or vanished mid-stream.
+//
+// A slow command on a live server is never cut off: sshd answers keepalives
+// even while the command is silent.
+func (c *Client) keepAlive(interval time.Duration) {
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+
+	var reply chan error // nil while no request is outstanding
+	missed := 0
+	for {
+		select {
+		case <-c.done:
+			return
+		case err := <-reply:
+			if err != nil {
+				return // connection already closed
+			}
+			reply, missed = nil, 0
+		case <-tick.C:
+			if reply == nil {
+				reply = make(chan error, 1)
+				go func(ch chan error) {
+					_, _, err := c.conn.SendRequest("keepalive@openssh.com", true, nil)
+					ch <- err
+				}(reply)
+				continue
+			}
+			missed++
+			if missed >= keepAliveMax {
+				c.mu.Lock()
+				c.dead = fmt.Errorf("ssh %s: server stopped responding (no answer for %s)", c.where, time.Duration(missed)*interval)
+				c.mu.Unlock()
+				c.conn.Close()
+				return
+			}
+		}
+	}
+}
+
+// err reports why the connection was dropped by keepAlive, or nil.
+func (c *Client) err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.dead
 }
 
 func isTimeout(err error) bool {
@@ -168,15 +241,21 @@ func (l *limitedBuffer) String() string {
 
 type Process struct {
 	ctx    context.Context
+	client *Client
 	sess   *ssh.Session
 	Out    io.Reader
 	stderr limitedBuffer
 	errCh  chan error
+	stop   func() bool // unregisters the ctx cancel hook
 }
 
 // Exec starts a remote command and streams its stdout.
 // Only explicit commands should ever be passed here; this is the single
 // choke point through which all remote execution flows.
+//
+// Cancelling ctx closes the whole connection, not just the session: a frozen
+// server would never acknowledge a session close, and a read on Out would
+// stay blocked.
 func (c *Client) Exec(ctx context.Context, command string) (*Process, error) {
 	sess, err := c.conn.NewSession()
 	if err != nil {
@@ -190,11 +269,12 @@ func (c *Client) Exec(ctx context.Context, command string) (*Process, error) {
 	}
 
 	p := &Process{
-		ctx:   ctx,
-		sess:  sess,
-		Out:   out,
-		errCh: make(chan error, 1),
+		ctx:    ctx,
+		client: c,
+		sess:   sess,
+		errCh:  make(chan error, 1),
 	}
+	p.Out = procReader{p: p, r: out}
 	p.stderr.limit = maxStderr
 	// Must point at the Process field: a throwaway buffer here would discard
 	// every diagnostic a failing remote command emits, which is the only
@@ -206,38 +286,75 @@ func (c *Client) Exec(ctx context.Context, command string) (*Process, error) {
 		return nil, fmt.Errorf("start remote command: %w", err)
 	}
 
+	p.stop = context.AfterFunc(ctx, func() { c.conn.Close() })
+
 	go func() {
 		p.errCh <- sess.Wait()
 	}()
 	return p, nil
 }
 
+// procReader is Process.Out. When the connection was cut by Ctrl-C or by
+// keepAlive, the stdout pipe just ends, which would look like a complete
+// stream; procReader replaces that with the real reason.
+type procReader struct {
+	p *Process
+	r io.Reader
+}
+
+func (r procReader) Read(b []byte) (int, error) {
+	n, err := r.r.Read(b)
+	if err != nil {
+		if why := r.p.interrupted(); why != nil {
+			return n, why
+		}
+	}
+	return n, err
+}
+
+// interrupted reports why the connection was cut from our side, or nil.
+func (p *Process) interrupted() error {
+	if err := p.client.err(); err != nil {
+		return err
+	}
+	if err := p.ctx.Err(); err != nil {
+		return fmt.Errorf("cancelled: %w", err)
+	}
+	return nil
+}
+
 // Wait blocks until the remote command has finished, then returns its exit
 // status. It also reacts to context cancellation by killing the session.
 func (p *Process) Wait() error {
+	defer p.stop()
+	var err error
 	select {
 	case <-p.ctx.Done():
 		p.sess.Close()
-		return fmt.Errorf("cancelled: %w", p.ctx.Err())
-	case err := <-p.errCh:
-		if err != nil {
-			detail := strings.TrimSpace(p.stderr.String())
-			if exitErr, ok := err.(*ssh.ExitError); ok {
-				if detail != "" {
-					return fmt.Errorf("remote exit %d: %s", exitErr.ExitStatus(), detail)
-				}
-				return fmt.Errorf("remote exit %d", exitErr.ExitStatus())
-			}
-			return fmt.Errorf("remote command failed: %v (%s)", err, detail)
-		}
-		return nil
+	case err = <-p.errCh:
 	}
+	if why := p.interrupted(); why != nil {
+		return why
+	}
+	if err != nil {
+		detail := strings.TrimSpace(p.stderr.String())
+		if exitErr, ok := err.(*ssh.ExitError); ok {
+			if detail != "" {
+				return fmt.Errorf("remote exit %d: %s", exitErr.ExitStatus(), detail)
+			}
+			return fmt.Errorf("remote exit %d", exitErr.ExitStatus())
+		}
+		return fmt.Errorf("remote command failed: %v (%s)", err, detail)
+	}
+	return nil
 }
 
 func (p *Process) Kill() error {
+	p.stop()
 	return p.sess.Close()
 }
 
 func (c *Client) Close() error {
+	c.closeOnce.Do(func() { close(c.done) })
 	return c.conn.Close()
 }

@@ -75,6 +75,7 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 		KeyPath:    pathexp.Expand(spec.SSH.Key),
 		KnownHosts: pathexp.Expand(spec.SSH.KnownHosts),
 		Timeout:    spec.SSH.ConnectTimeout,
+		KeepAlive:  spec.SSH.KeepAliveInterval,
 	})
 	if err != nil {
 		return nil, err
