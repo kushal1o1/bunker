@@ -22,6 +22,16 @@ read-only commands.
 Full documentation: <https://kushal1o1.github.io/bunker/> - walkthrough, command
 reference, and configuration notes (generated from `docs/`).
 
+## Install
+
+Linux x86_64 (other systems, checksums and `go install`: see
+[Getting Started](https://kushal1o1.github.io/bunker/getting-started/)):
+
+    curl -LO https://github.com/kushal1o1/bunker/releases/latest/download/bunker-linux-amd64
+    chmod +x bunker-linux-amd64
+    sudo mv bunker-linux-amd64 /usr/local/bin/bunker
+    bunker version
+
 ## Build
 
     go build -o bunker ./cmd/bunker

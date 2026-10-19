@@ -2,14 +2,95 @@
 
 ## 1. Install
 
-From the Go toolchain (Go 1.27 or newer):
+bunker is a single binary with no dependencies. It runs on your machine, not
+on the servers you back up.
+
+### Prebuilt binary
+
+Every [release](https://github.com/kushal1o1/bunker/releases) has these files:
+
+| System | File |
+|---|---|
+| Linux, x86_64 | `bunker-linux-amd64` |
+| Linux, ARM64 (Raspberry Pi 4/5, Graviton) | `bunker-linux-arm64` |
+| macOS, Intel | `bunker-darwin-amd64` |
+| macOS, Apple Silicon (M1 and later) | `bunker-darwin-arm64` |
+| Windows, x86_64 | `bunker-windows-amd64.exe` |
+
+Not sure which one? Run `uname -sm`: `x86_64` means amd64, `aarch64` or
+`arm64` means arm64.
+
+**Linux**
+
+```bash
+FILE=bunker-linux-amd64    # or bunker-linux-arm64
+curl -LO https://github.com/kushal1o1/bunker/releases/latest/download/$FILE
+curl -LO https://github.com/kushal1o1/bunker/releases/latest/download/checksums.txt
+sha256sum --check --ignore-missing checksums.txt    # must print: OK
+chmod +x $FILE
+sudo mv $FILE /usr/local/bin/bunker
+```
+
+**macOS**
+
+```bash
+FILE=bunker-darwin-arm64   # or bunker-darwin-amd64 on Intel
+curl -LO https://github.com/kushal1o1/bunker/releases/latest/download/$FILE
+curl -LO https://github.com/kushal1o1/bunker/releases/latest/download/checksums.txt
+shasum -a 256 --check --ignore-missing checksums.txt    # must print: OK
+chmod +x $FILE
+xattr -d com.apple.quarantine $FILE 2>/dev/null    # let macOS run a downloaded binary
+sudo mv $FILE /usr/local/bin/bunker
+```
+
+**Windows**
+
+Download `bunker-windows-amd64.exe` from the
+[latest release](https://github.com/kushal1o1/bunker/releases/latest), rename it
+to `bunker.exe`, and run it from PowerShell:
+
+```powershell
+.\bunker.exe version
+```
+
+Always check the checksum. If the check fails, or a "binary" is only a few
+bytes long, the download went wrong: delete it and download again.
+
+### With Go
+
+Go 1.27 or newer:
 
 ```bash
 go install github.com/kushal1o1/bunker/cmd/bunker@latest
 ```
 
-Or download a prebuilt binary from the [Releases](https://github.com/kushal1o1/bunker/releases)
-page.
+`@latest` installs the newest stable release and skips pre-releases such as
+`v0.2.0-dev`. To get a specific version, name it:
+
+```bash
+go install github.com/kushal1o1/bunker/cmd/bunker@v0.2.0-dev
+```
+
+### From source
+
+```bash
+git clone https://github.com/kushal1o1/bunker.git
+cd bunker
+go build -o bunker ./cmd/bunker
+```
+
+### Check it worked
+
+```bash
+bunker version
+```
+
+```
+bunker v0.2.0-dev
+```
+
+If the shell says `command not found`, `/usr/local/bin` (or `$(go env GOPATH)/bin`
+for `go install`) is not on your `PATH`.
 
 ## 2. Create the encryption key
 
