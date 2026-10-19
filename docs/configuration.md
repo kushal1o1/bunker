@@ -23,6 +23,7 @@ servers:
       key: ~/.ssh/bunker_ed25519
       known_hosts: ~/.ssh/known_hosts
       connect_timeout: 10s         # give up on a host that does not answer
+      keepalive_interval: 15s      # drop a server that freezes mid-backup
     backup:
       postgres:
         dbs: [shop_db, blog_db]    # several databases on one server
@@ -72,6 +73,7 @@ It is also the folder name under `storage.dir`.
 | `ssh.key` | path | `~/.ssh/id_ed25519` | no | private key used to log in |
 | `ssh.known_hosts` | path | `~/.ssh/known_hosts` | no | the server's host key must already be in this file |
 | `ssh.connect_timeout` | duration | `10s` | no | how long to wait for the server to answer, for the TCP connect and again for the SSH handshake; write it with a unit (`30s`, `1m`), at least `1s` |
+| `ssh.keepalive_interval` | duration | `15s` | no | how often a connected server is checked; after 3 checks in a row go unanswered the server is dropped; at least `1s` |
 | `backup.postgres.dbs` | list of strings | | see below | databases to dump with `pg_dump -Fc` |
 | `backup.postgres.user` | string | | no | passed as `pg_dump -U` |
 | `backup.postgres.host` | string | | no | passed as `pg_dump -h`; leave empty to use the local socket |
@@ -225,6 +227,21 @@ servers:
       connect_timeout: 30s
 ```
 
+### A server that freezes mid-backup
+
+Once connected, bunker checks every `ssh.keepalive_interval` (15s by default)
+that the server is still there. If 3 checks in a row get no answer, about a
+minute with the default, the server is dropped, its partial snapshot is
+deleted, and the run reports:
+
+```
+ssh root@203.0.113.10:22: server stopped responding (no answer for 45s)
+```
+
+A command that is simply slow, like `pg_dump` working through a large table,
+is never cut off: the server answers the checks while the command is busy.
+Only a host that has stopped answering (power loss, network gone) is dropped.
+
 ## Validation rules
 
 bunker refuses to start when:
@@ -232,7 +249,8 @@ bunker refuses to start when:
 - `servers` is empty
 - a server has no `host`
 - `ssh.port` is outside 1 to 65535
-- `ssh.connect_timeout` is less than `1s`, or a number without a unit
+- `ssh.connect_timeout` or `ssh.keepalive_interval` is less than `1s`, or a
+  number without a unit
 - a server has neither `postgres.dbs` nor `paths`
 - a database name or a path is an empty string
 - `concurrency` is less than 1

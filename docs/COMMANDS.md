@@ -205,11 +205,12 @@ Notes:
 - Every server is attempted. A failure is reported in the summary and does not
   stop the others.
 - A server that does not answer fails after `ssh.connect_timeout` (10s by
-  default) instead of hanging the run. See
-  [Timeouts](configuration.md#timeouts).
+  default), and one that freezes mid-backup is dropped after about a minute,
+  instead of hanging the run. See [Timeouts](configuration.md#timeouts).
 - Exit code `0` when every server succeeded, `1` if any failed, so cron or a
   monitor can alert on it.
-- `Ctrl-C` (or SIGTERM) closes the SSH sessions and deletes the partial
+- `Ctrl-C` (or SIGTERM) stops at once, even in the middle of a transfer,
+  closes the SSH connections and deletes the partial
   snapshots, so a half-written snapshot never looks complete. Servers that had
   not started yet show as `cancelled`.
 - Naming the same server twice backs it up once.
