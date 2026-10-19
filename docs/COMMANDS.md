@@ -58,7 +58,7 @@ bunker version
 No flags.
 
 ```
-bunker 0.1.0-dev
+bunker 0.2.0-dev
 ```
 
 ---
