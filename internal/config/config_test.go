@@ -241,3 +241,43 @@ servers:
 		})
 	}
 }
+
+func TestKeepAliveInterval(t *testing.T) {
+	cases := []struct {
+		name    string
+		line    string // under ssh:, empty for none
+		want    time.Duration
+		wantErr string
+	}{
+		{name: "default", want: DefaultKeepAlive},
+		{name: "custom", line: "keepalive_interval: 30s", want: 30 * time.Second},
+		{name: "too small", line: "keepalive_interval: 200ms", wantErr: "at least 1s"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTemp(t, "bunker.yaml", `
+servers:
+  vps-01:
+    host: 203.0.113.10
+    ssh:
+      user: bunker
+      `+tc.line+`
+    backup:
+      paths: [/srv/data]
+`)
+			cfg, err := Load(path)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := cfg.Servers["vps-01"].SSH.KeepAliveInterval; got != tc.want {
+				t.Errorf("keepalive_interval = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
