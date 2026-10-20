@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 
 	"filippo.io/age"
+	"github.com/klauspost/compress/zstd"
 	"github.com/kushal1o1/bunker/internal/config"
 	"github.com/kushal1o1/bunker/internal/pathexp"
-	"github.com/klauspost/compress/zstd"
 )
 
 // ArtifactStatus is the per-artifact outcome of one verify pass. NoKey is set

@@ -11,16 +11,16 @@ import (
 	"time"
 
 	"filippo.io/age"
+	"github.com/klauspost/compress/zstd"
 	"github.com/kushal1o1/bunker/internal/config"
 	"github.com/kushal1o1/bunker/internal/pathexp"
 	"github.com/kushal1o1/bunker/internal/sshx"
-	"github.com/klauspost/compress/zstd"
 )
 
 type Result struct {
-	Server   string
-	Snapshot string
-	Dir      string
+	Server    string
+	Snapshot  string
+	Dir       string
 	Artifacts []ArtifactEntry
 }
 

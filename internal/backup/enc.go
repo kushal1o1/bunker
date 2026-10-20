@@ -24,8 +24,8 @@ func LoadRecipient(identityPath string) (*age.X25519Recipient, error) {
 // public half, which can encrypt but can never read a backup back.
 //
 // TODO: support more than one identity in the file (age lets you keep old
-//       and new keys side by side so a snapshot written before a key
-//       rotation still verifies). Today only ids[0] is considered.
+// and new keys side by side so a snapshot written before a key rotation
+// still verifies). Today only ids[0] is considered.
 func LoadIdentity(identityPath string) (*age.X25519Identity, error) {
 	data, err := os.ReadFile(identityPath)
 	if err != nil {
