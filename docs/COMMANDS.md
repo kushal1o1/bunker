@@ -169,7 +169,7 @@ Real run in a terminal: a live table, one row per server, redrawn in place
 ✓ kaskiserver  done                        2 artifacts  53.0 MB  8.1s
 ⟳ web-01       files/var/www/shop/media    2/3                   3.2s
 ○ web-02       waiting
-✗ db-01        failed: ssh: dial tcp 10.0.0.5:22: connection refused  1s
+✗ db-01        failed: ssh: dial tcp 192.0.2.5:22: connection refused  1s
 ```
 
 Real run from cron or a pipe: one line per event (on stdout), prefixed with the
@@ -179,7 +179,7 @@ server, so the log stays readable when servers run in parallel:
 [kaskiserver] connecting 203.0.113.10
 [web-01] connecting 203.0.113.20
 [kaskiserver] ok postgres/mydb 41.0 MB 6.2s
-[db-01] FAILED: ssh: dial tcp 10.0.0.5:22: connection refused
+[db-01] FAILED: ssh: dial tcp 192.0.2.5:22: connection refused
 [kaskiserver] ok files/var/www/my-project/uploads 12.0 MB 1.8s
 [kaskiserver] snapshot 2026-10-17T09-12-03 (53.0 MB) in 8.1s
 ```
@@ -191,7 +191,7 @@ Both end with a summary:
   ✓ kaskiserver  2026-10-17T09-12-03  53.0 MB
   ✓ web-01       2026-10-17T09-12-04  20.0 MB
   ✓ web-02       2026-10-17T09-12-09  7.0 MB
-  ✗ db-01        ssh: dial tcp 10.0.0.5:22: connection refused
+  ✗ db-01        ssh: dial tcp 192.0.2.5:22: connection refused
 ```
 
 Notes:

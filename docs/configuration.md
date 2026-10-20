@@ -8,6 +8,9 @@ each of them, and where the encrypted snapshots go.
 - A leading `~` in any path field is expanded to your home directory.
 - Unknown keys are an error. A typo such as `dbz:` or `known_host:` stops
   bunker with a parse error instead of being silently ignored.
+- IPs in these docs (`192.0.2.x`, `198.51.100.x`, `203.0.113.x`) are reserved
+  documentation addresses ([RFC 5737](https://datatracker.ietf.org/doc/html/rfc5737)),
+  not real servers.
 
 ## Full example
 

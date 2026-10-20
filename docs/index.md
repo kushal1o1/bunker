@@ -5,17 +5,33 @@
 
 # bunker
 
-bunker backs up PostgreSQL databases and file paths from one or more servers
-over SSH. It streams `pg_dump` and `tar` output to your machine, compresses it
-(zstd), encrypts it (age), and stores it locally with a SHA-256 checksum per
-artifact in `manifest.json`.
+**A backup orchestrator for your fleet of servers.** One binary on your machine
+pulls encrypted, verified backups from all of them over SSH. Nothing to install
+on the servers.
 
-The private key never leaves your machine, and the server only ever runs two
-read-only commands.
+bunker backs up your databases and files from every server in one run. It does
+not reinvent backup tools. It orchestrates them and handles the rest: many
+servers in parallel, timeouts, encryption, verification and retention.
 
 ```mermaid
 flowchart LR
-    A["VPS<br/>pg_dump · tar"] -->|ssh| B["your machine<br/>zstd → age"] --> C["storage<br/>sha256 manifest"]
+    A["servers<br/>databases · files"] -->|ssh| B["bunker<br/>zstd → age"] --> C["storage<br/>sha256 manifest"]
+```
+
+## How it works
+
+1. Run a read-only command on the server (`pg_dump -Fc` or `tar`).
+2. Stream it through zstd and age into a file on your machine.
+3. Record each file's SHA-256 in `manifest.json`. Without it, the snapshot is
+   incomplete.
+
+```
+~/backups/
+  my-vps/
+    2026-10-17T09-12-03/
+      manifest.json
+      postgres/mydb.dump.zst.age
+      files/var-www-uploads.tar.zst.age
 ```
 
 ## Quickstart
@@ -23,12 +39,16 @@ flowchart LR
 ```bash
 bunker keygen                       # create the encryption key once
 # edit bunker.yaml: one server, a database or a path
-bunker backup run my-vps            # stream pg_dump | zstd | age to disk
-bunker backup verify my-vps 2026-10-08T13-32-59   # prove it's readable
+bunker backup run my-vps            # take a snapshot
+bunker backup verify my-vps 2026-10-17T09-12-03   # prove it is readable
 ```
+
+Today: PostgreSQL and files to local disk. Next: S3, restore, more databases.
 
 ## Docs
 
-- [Getting Started](getting-started.md) - install, configure one server, take your first backup
+- [Getting Started](getting-started.md) - install and your first backup
+- [Configuration](configuration.md) - every `bunker.yaml` field
+- [Retention](retention.md) - pruning old snapshots
 - [Commands](COMMANDS.md) - full command reference
-- [Example config](https://github.com/kushal1o1/bunker/blob/main/examples/bunker.yaml)
+- [Roadmap](roadmap.md) - what is done and what is next
