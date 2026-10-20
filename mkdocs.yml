@@ -1,5 +1,5 @@
 site_name: bunker
-site_description: Encrypted, verifiable PostgreSQL and file backups over SSH
+site_description: "A backup orchestrator for your fleet of servers: encrypted, verified backups over SSH"
 site_dir: site
 site_url: https://kushal1o1.github.io/bunker/
 repo_url: https://github.com/kushal1o1/bunker
@@ -40,6 +40,7 @@ nav:
   - Configuration: configuration.md
   - Retention: retention.md
   - Commands: COMMANDS.md
+  - Roadmap: roadmap.md
 
 plugins:
   - search
