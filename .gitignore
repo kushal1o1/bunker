@@ -3,3 +3,6 @@
 /site/
 *.test
 venv/
+bunker.yaml
+docsForReference/
+.env
