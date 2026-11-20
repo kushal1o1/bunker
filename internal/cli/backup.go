@@ -27,9 +27,10 @@ func newBackupListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list [server...]",
 		Short: "list stored snapshots (all servers when none given)",
-		Long: `List the snapshots in local storage for each server, newest first, with
-their size and status. Reads storage only: no network and no key needed.
-"complete" means the manifest is valid, not that the snapshot was verified.`,
+		Long: `List the snapshots for each server, newest first, with their size and
+status. With both storage.dir and storage.s3 set, LOCAL and S3 columns show
+where each snapshot is. No SSH and no key needed. "complete" means the
+manifest is valid, not that the snapshot was verified.`,
 		Example: `  # every configured server
   bunker backup list
 
@@ -37,61 +38,64 @@ their size and status. Reads storage only: no network and no key needed.
   bunker backup list my-vps web-01`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(args)
+			return runList(cmd, args)
 		},
 	}
 }
 
-// runList reads local storage only: no network and no key.
-func runList(args []string) error {
+// runList reads storage only: no SSH and no key.
+func runList(cmd *cobra.Command, args []string) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
-
-	targets := args
-	if len(targets) == 0 {
-		targets = cfg.ServerNames()
+	targets, err := targetServers(cfg, args)
+	if err != nil {
+		return err
 	}
-	for _, name := range targets {
-		if _, ok := cfg.Servers[name]; !ok {
-			return fmt.Errorf("unknown server %q (try: bunker server list)", name)
-		}
+	ctx := cmd.Context()
+	stores, err := openStores(ctx, cfg, false)
+	if err != nil {
+		return err
 	}
 
 	for i, name := range targets {
 		if i > 0 {
 			fmt.Println()
 		}
-		snaps, err := backup.ListSnapshots(cfg.Storage.Dir, name)
+		rows, err := listMerged(ctx, stores, name)
 		if err != nil {
 			return err
 		}
-		if len(snaps) == 0 {
+		if len(rows) == 0 {
 			fmt.Printf("%s: no snapshots\n", name)
 			continue
 		}
 
 		var total int64
-		for _, s := range snaps {
-			total += s.Size()
+		for _, r := range rows {
+			total += r.size()
 		}
-		plural := "s"
-		if len(snaps) == 1 {
-			plural = ""
-		}
-		fmt.Printf("%s (%d snapshot%s, %s)\n", name, len(snaps), plural, backup.HumanBytes(total))
+		fmt.Printf("%s (%d snapshot%s, %s)\n", name, len(rows), plural(len(rows)), backup.HumanBytes(total))
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "  SNAPSHOT\tCREATED (UTC)\tARTIFACTS\tSIZE\tSTATUS")
-		for _, s := range snaps {
+		if stores.Both() {
+			fmt.Fprintln(w, "  SNAPSHOT\tCREATED (UTC)\tARTIFACTS\tSIZE\tLOCAL\tS3")
+		} else {
+			fmt.Fprintln(w, "  SNAPSHOT\tCREATED (UTC)\tARTIFACTS\tSIZE\tSTATUS")
+		}
+		for _, r := range rows {
 			created, count, size := "-", "-", "-"
-			if s.Status == backup.Complete {
-				created = s.Created.Format("2006-01-02 15:04:05")
-				count = fmt.Sprint(len(s.Manifest.Artifacts))
-				size = backup.HumanBytes(s.Size())
+			if b := r.best(); b.Status == backup.Complete {
+				created = b.Created.Format("2006-01-02 15:04:05")
+				count = fmt.Sprint(len(b.Manifest.Artifacts))
+				size = backup.HumanBytes(b.Size())
 			}
-			fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n", s.ID, created, count, size, s.Status)
+			if stores.Both() {
+				fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\t%s\n", r.id, created, count, size, copyStatus(r.local), copyStatus(r.remote))
+			} else {
+				fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n", r.id, created, count, size, r.best().Status)
+			}
 		}
 		if err := w.Flush(); err != nil {
 			return err
@@ -161,6 +165,13 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 		return nil
 	}
 
+	// Open storage before any SSH: a missing bucket or credentials should
+	// fail once, not once per server.
+	stores, err := openStores(cmd.Context(), cfg, true)
+	if err != nil {
+		return err
+	}
+
 	// Live table on a terminal; one line per event for cron and pipes.
 	var view progressView
 	if isTerminal() {
@@ -173,7 +184,7 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 		view = newLineLog(cmd.OutOrStdout(), hosts)
 	}
 
-	runner := &backup.Runner{Cfg: cfg, Progress: view.Event}
+	runner := &backup.Runner{Cfg: cfg, Stores: stores, Progress: view.Event}
 	start := time.Now()
 	results := backup.RunMany(cmd.Context(), runner, targets, cfg.Concurrency, view.Done)
 	view.Close()
@@ -182,19 +193,30 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 		return err
 	}
 
-	failed := 0
+	failed, upFailed := 0, 0
 	for _, r := range results {
-		if r.Err != nil {
+		switch {
+		case r.Err != nil:
 			failed++
+		case r.Result.UploadErr != nil:
+			upFailed++
 		}
-	}
-	if failed > 0 {
-		return fmt.Errorf("%d of %d server(s) failed", failed, len(results))
 	}
 	// One snapshot gets one hint; a multi-server run stays quiet rather than
 	// printing a list.
-	if len(results) == 1 {
-		printHint(cmd, nextVerify(results[0].Server, results[0].Result.Snapshot))
+	if len(results) == 1 && failed == 0 {
+		r := results[0]
+		if upFailed > 0 {
+			printHint(cmd, []string{"storage", "sync", r.Server})
+		} else {
+			printHint(cmd, nextVerify(r.Server, r.Result.Snapshot))
+		}
+	}
+	switch {
+	case failed > 0:
+		return fmt.Errorf("%d of %d server(s) failed", failed, len(results))
+	case upFailed > 0:
+		return fmt.Errorf("%d upload(s) to s3 failed; the local snapshots are complete (retry with: bunker storage sync)", upFailed)
 	}
 	return nil
 }
@@ -239,45 +261,73 @@ func printPlan(cfg *config.Config, targets []string) error {
 	}
 
 	fmt.Println()
-	fmt.Println("Storage: " + cfg.Storage.Dir)
+	if cfg.Storage.Dir != "" {
+		fmt.Println("Storage: " + cfg.Storage.Dir)
+	}
+	if s3 := cfg.Storage.S3; s3 != nil {
+		fmt.Printf("Storage: s3://%s/%s (%s)\n", s3.Bucket, s3.Prefix, s3.Endpoint)
+	}
 	fmt.Println("Encryption identity: " + cfg.Encryption.Identity)
 	return nil
 }
 
 func newBackupVerifyCmd() *cobra.Command {
+	var remote bool
 	cmd := &cobra.Command{
 		Use:   "verify <server> <snapshot>",
 		Short: "verify a snapshot's checksums, archive integrity and decryption",
 		Long: `Check one stored snapshot without touching the network: every artifact
 must exist at its recorded size, match its SHA-256, and fully decrypt and
 decompress with your age identity. Exits 0 only when every check passes.
-NO KEY means the snapshot was encrypted to a different key, not corruption.`,
+NO KEY means the snapshot was encrypted to a different key, not corruption.
+Reads local storage, or S3 when it is the only store. With both, --remote
+checks the S3 copy; it is streamed, never saved to disk.`,
 		Example: `  # find a snapshot, then verify it
   bunker backup list my-vps
-  bunker backup verify my-vps 2026-10-17T09-12-03`,
+  bunker backup verify my-vps 2026-10-17T09-12-03
+
+  # check the S3 copy instead of the local one
+  bunker backup verify my-vps 2026-10-17T09-12-03 --remote`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runVerify(cmd, args)
+			return runVerify(cmd, args, remote)
 		},
 	}
+	cmd.Flags().BoolVar(&remote, "remote", false, "verify the copy in s3 (when storage has both)")
 	return cmd
 }
 
 // runVerify needs no network: it reads the stored snapshot, checks each
 // artifact against the manifest's size and SHA-256, then decrypts and
 // decompresses every artifact to prove the archive is genuinely readable.
-func runVerify(cmd *cobra.Command, args []string) error {
+func runVerify(cmd *cobra.Command, args []string, remote bool) error {
 	cfg, err := loadConfig()
 	if err != nil {
 		return err
 	}
+	stores, err := openStores(cmd.Context(), cfg, false)
+	if err != nil {
+		return err
+	}
+	store := stores.Primary()
+	if remote {
+		if stores.Remote == nil {
+			return errors.New("--remote needs storage.s3 in bunker.yaml")
+		}
+		store = stores.Remote
+	}
 
 	server, snapshot := args[0], args[1]
 	verifier := &backup.Verifier{
-		Cfg:  cfg,
-		Logf: func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
+		Cfg:   cfg,
+		Store: store,
+		Logf:  func(format string, args ...any) { fmt.Printf(format+"\n", args...) },
 	}
-	fmt.Printf("Verifying %s/%s\n", server, snapshot)
+	if store.Name() == "s3" {
+		fmt.Printf("Verifying %s/%s in %s\n", server, snapshot, store.Where())
+	} else {
+		fmt.Printf("Verifying %s/%s\n", server, snapshot)
+	}
 
 	res, err := verifier.Verify(cmd.Context(), server, snapshot)
 	if err != nil {
