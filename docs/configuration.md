@@ -46,8 +46,12 @@ servers:
         port: 5432                 # pg_dump -p 5432
 
 storage:
-  type: local
-  dir: ~/backups
+  dir: ~/backups                   # local copy
+  s3:                              # offsite copy (optional)
+    endpoint: https://s3.eu-central-1.amazonaws.com
+    bucket: my-bunker
+    region: eu-central-1           # optional
+    prefix: prod/                  # optional
 
 encryption:
   identity: ~/.config/bunker/key.txt
@@ -95,10 +99,13 @@ then comes from `~/.pgpass` on the server.
 
 | Field | Type | Default | Required | Notes |
 |---|---|---|---|---|
-| `storage.type` | string | `local` | no | only `local` is implemented |
-| `storage.dir` | path | `~/backups` | no | root folder for snapshots; a relative path is resolved against the directory you run bunker from |
+| `storage.dir` | path | `~/backups` when no `storage` is set | no | local folder for snapshots; a relative path is resolved against the directory you run bunker from |
+| `storage.s3.endpoint` | URL | | with `s3` | starts with `https://`, or `http://` for a local MinIO; no path |
+| `storage.s3.bucket` | string | | with `s3` | must already exist; bunker never creates or deletes buckets |
+| `storage.s3.region` | string | detected | no | only if your provider needs it |
+| `storage.s3.prefix` | string | none | no | put snapshots under a folder, e.g. `prod/`, to share a bucket |
 
-Snapshots are written to `<storage.dir>/<server name>/<timestamp>/`.
+Where you set a location is where snapshots go. See [Storage](#storage-local-s3-or-both).
 
 ### encryption
 
@@ -245,6 +252,90 @@ A command that is simply slow, like `pg_dump` working through a large table,
 is never cut off: the server answers the checks while the command is busy.
 Only a host that has stopped answering (power loss, network gone) is dropped.
 
+## Storage: local, S3 or both
+
+| You set | Snapshots go to |
+|---|---|
+| `dir` | local disk |
+| `s3` | S3 only, streamed straight to the bucket with no temp files |
+| `dir` and `s3` | local disk, then uploaded to S3 |
+| nothing | local disk, `~/backups` |
+
+```yaml
+storage:
+  dir: ~/backups
+  s3:
+    endpoint: https://s3.eu-central-1.amazonaws.com
+    bucket: my-bunker
+```
+
+Both copies use the same layout:
+
+```
+<dir>/<server>/<snapshot>/...
+s3://<bucket>/<prefix><server>/<snapshot>/...
+```
+
+`manifest.json` is always written last, so a snapshot that stopped half way
+never counts as complete, locally or in S3.
+
+### S3 providers
+
+Any S3-compatible service works:
+
+| Provider | endpoint |
+|---|---|
+| AWS S3 | `https://s3.<region>.amazonaws.com` |
+| Cloudflare R2 | `https://<account-id>.r2.cloudflarestorage.com` |
+| Backblaze B2 | `https://s3.<region>.backblazeb2.com` |
+| MinIO | `http://localhost:9000` |
+
+### Credentials
+
+Credentials never go in `bunker.yaml`. bunker reads them from the
+environment:
+
+```bash
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_SESSION_TOKEN=...   # only for temporary credentials
+```
+
+For cron, put them in a file only you can read (`chmod 600`) and load it in the
+job:
+
+```bash
+0 3 * * * . ~/.config/bunker/s3.env && bunker backup run --all
+```
+
+The key needs these permissions on the bucket: list, read and write objects,
+and delete objects for `retention apply`. On AWS:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["s3:ListBucket", "s3:ListBucketMultipartUploads"], "Resource": "arn:aws:s3:::my-bunker" },
+    { "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"], "Resource": "arn:aws:s3:::my-bunker/*" }
+  ]
+}
+```
+
+### If an upload fails
+
+With `dir` and `s3`, the local snapshot is written first. If the upload to S3
+then fails, the local snapshot is still complete and kept, the run exits with
+code `1` so cron notices, and `bunker storage sync` uploads it later.
+
+### Limits
+
+- One artifact (one database dump or one path) can be up to 320 GiB in S3.
+  Uploads are sent in 32 MiB parts, and bunker holds one part in memory per
+  upload in progress.
+- Add a lifecycle rule to the bucket that aborts incomplete multipart uploads
+  after a day. bunker cleans up after a failed upload, but a crash or a lost
+  network can leave parts behind, and providers charge for them.
+
 ## Validation rules
 
 bunker refuses to start when:
@@ -257,4 +348,6 @@ bunker refuses to start when:
 - a server has neither `postgres.dbs` nor `paths`
 - a database name or a path is an empty string
 - `concurrency` is less than 1
+- `storage.s3` has no `endpoint` or `bucket`, or the endpoint has no
+  `https://` / `http://` or contains a path
 - the file contains a key bunker does not know

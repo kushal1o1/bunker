@@ -17,7 +17,8 @@ Every command that reads config accepts `-c`. Paths inside the config support
 
 ### Hints
 
-After `backup run --dry-run`, a single-server `backup run`, and a
+After `backup run --dry-run`, a single-server `backup run` (or its failed
+upload), and a
 `retention apply` preview that would delete something, bunker prints one
 suggested next command, ready to paste:
 
@@ -42,6 +43,7 @@ hints off with `--no-hints` or by setting `BUNKER_NO_HINTS=1`.
 | [`bunker backup list [server...]`](#backup-list) | list stored snapshots |
 | [`bunker backup verify <server> <snapshot>`](#backup-verify) | verify a snapshot's checksums, archive integrity and decryption |
 | [`bunker retention apply [server...]`](#retention-apply) | preview, or with `--yes` delete, snapshots the retention policy drops |
+| [`bunker storage sync [server...]`](#storage-sync) | upload local snapshots that are missing from S3 |
 | `bunker completion <shell>` | generate a shell completion script |
 | `bunker help [command]` | help for any command |
 
@@ -207,8 +209,14 @@ Notes:
 - A server that does not answer fails after `ssh.connect_timeout` (10s by
   default), and one that freezes mid-backup is dropped after about a minute,
   instead of hanging the run. See [Timeouts](configuration.md#timeouts).
+- With `storage.s3` set, each snapshot is uploaded too: streamed straight to
+  the bucket when S3 is the only store, or copied after the local snapshot is
+  written when both are set. The table shows `uploading to s3 2/3`. See
+  [Storage](configuration.md#storage-local-s3-or-both).
+- The bucket and credentials are checked before any server is contacted.
 - Exit code `0` when every server succeeded, `1` if any failed, so cron or a
-  monitor can alert on it.
+  monitor can alert on it. A failed upload also exits `1`, but the local
+  snapshot is complete and kept: run `bunker storage sync` to upload it.
 - `Ctrl-C` (or SIGTERM) stops at once, even in the middle of a transfer,
   closes the SSH connections and deletes the partial
   snapshots, so a half-written snapshot never looks complete. Servers that had
@@ -244,6 +252,17 @@ my-vps (3 snapshots, 84.0 MB)
 web-01: no snapshots
 ```
 
+With both `storage.dir` and `storage.s3`, the STATUS column becomes one column
+per store, so you can see where each snapshot is:
+
+```
+my-vps (3 snapshots, 126.0 MB)
+  SNAPSHOT             CREATED (UTC)        ARTIFACTS  SIZE    LOCAL     S3
+  2026-10-17T09-12-03  2026-10-17 09:12:03  2          42.0 MB  complete  complete
+  2026-10-16T09-10-00  2026-10-16 09:10:00  2          42.0 MB  complete  -
+  2026-10-01T09-00-00  2026-10-01 09:00:00  2          42.0 MB  -         complete
+```
+
 | Status | Meaning |
 |---|---|
 | `complete` | `manifest.json` is present and valid. This does not mean verified; run `bunker backup verify` for that. |
@@ -252,7 +271,7 @@ web-01: no snapshots
 
 Notes:
 
-- Reads local storage only: no network and no key needed.
+- Never connects over SSH and needs no key. With S3, it reads the bucket.
 - The size in the header adds up complete snapshots only.
 
 ---
@@ -265,9 +284,14 @@ Prove a stored snapshot is intact and readable.
 # find a snapshot, then verify it
 bunker backup list my-vps
 bunker backup verify my-vps 2026-10-17T09-12-03
+
+# check the S3 copy instead of the local one
+bunker backup verify my-vps 2026-10-17T09-12-03 --remote
 ```
 
-No flags.
+| Flag | Default | Meaning |
+|---|---|---|
+| `--remote` | `false` | verify the copy in S3 when storage has both `dir` and `s3` |
 
 ```
 Verifying my-vps/2026-10-17T09-12-03
@@ -296,6 +320,10 @@ Notes:
   different public key than your current identity (for example after
   `keygen --force`). Size and SHA-256 are still checked; only decrypt is
   skipped.
+- Reads the local copy, or S3 when it is the only store. An S3 snapshot is
+  streamed and checked as it downloads, never saved to disk.
+- Every artifact is read once: size, SHA-256 and decryption are checked in the
+  same pass.
 - Never connects over SSH and never writes anything.
 
 ---
@@ -332,4 +360,43 @@ Notes:
 
 - The newest snapshot is always kept.
 - Folders without a valid manifest are shown as `skip` and never deleted.
+- With both local and S3 storage, each snapshot is decided once and deleted
+  from both. A snapshot that exists in only one place still counts.
 - See [Retention](retention.md) for exactly how the policy decides.
+
+---
+
+## storage sync
+
+Upload local snapshots that S3 does not have yet, for example after an upload
+failed or after adding `storage.s3` to an existing setup.
+
+```bash
+# every configured server
+bunker storage sync
+
+# one server
+bunker storage sync my-vps
+```
+
+No flags.
+
+```
+Syncing /home/you/backups -> s3://my-bunker/prod/
+
+my-vps
+  SNAPSHOT             SIZE    ACTION
+  2026-10-17T09-12-03  42.0 MB  uploaded
+  2026-10-16T09-10-00  42.0 MB  already in s3
+  2026-10-15T09-00-11  -       skip (local no manifest)
+
+Uploaded 1 snapshot(s), 42.0 MB.
+```
+
+Notes:
+
+- Needs both `storage.dir` and `storage.s3`.
+- Artifacts are uploaded first and `manifest.json` last, so a copy only counts
+  once it is whole. A failed copy is removed from S3.
+- Snapshots without a valid local manifest are skipped.
+- Exit code `1` if any upload failed.

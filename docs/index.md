@@ -43,7 +43,7 @@ bunker backup run my-vps            # take a snapshot
 bunker backup verify my-vps 2026-10-17T09-12-03   # prove it is readable
 ```
 
-Today: PostgreSQL and files to local disk. Next: S3, restore, more databases.
+Today: PostgreSQL and files, to local disk, S3 or both. Next: Docker, restore, more databases.
 
 ## Docs
 
