@@ -40,9 +40,23 @@ type EncryptionSpec struct {
 	Identity string `json:"identity" yaml:"identity"`
 }
 
+// StorageSpec says where snapshots go: Dir for a local folder, S3 for a
+// bucket, or both. Setting a location is what turns it on.
 type StorageSpec struct {
-	Type string `json:"type" yaml:"type"`
-	Dir  string `json:"dir" yaml:"dir"`
+	Dir string  `json:"dir,omitempty" yaml:"dir,omitempty"`
+	S3  *S3Spec `json:"s3,omitempty" yaml:"s3,omitempty"`
+}
+
+// S3Spec is an S3-compatible bucket. Credentials never live here: they are
+// read from the environment.
+type S3Spec struct {
+	// Endpoint is a URL with scheme, e.g. https://s3.eu-central-1.amazonaws.com.
+	// http:// is allowed for a local MinIO.
+	Endpoint string `json:"endpoint" yaml:"endpoint"`
+	Bucket   string `json:"bucket" yaml:"bucket"`
+	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
+	// Prefix is prepended to every key, e.g. "prod/". Normalized to end in /.
+	Prefix string `json:"prefix,omitempty" yaml:"prefix,omitempty"`
 }
 
 type RetentionSpec struct {

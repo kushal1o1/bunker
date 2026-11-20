@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,7 +26,6 @@ const (
 	DefaultSSHTimeout  = 10 * time.Second
 	DefaultKeepAlive   = 15 * time.Second
 	DefaultIdentity    = "~/.config/bunker/key.txt"
-	DefaultStorageType = "local"
 	DefaultStorageDir  = "~/backups"
 	DefaultRetentionD  = 7
 	DefaultRetentionW  = 4
@@ -64,10 +64,9 @@ func (c *Config) setDefaults() {
 	if c.Concurrency == 0 {
 		c.Concurrency = DefaultConcurrency
 	}
-	if c.Storage.Type == "" {
-		c.Storage.Type = DefaultStorageType
-	}
-	if c.Storage.Dir == "" {
+	// No storage at all means local ~/backups. With only s3 set, there is no
+	// local copy, so dir must stay empty rather than get the default.
+	if c.Storage.Dir == "" && c.Storage.S3 == nil {
 		c.Storage.Dir = DefaultStorageDir
 	}
 	// Resolve the storage root to an absolute path once, here, so every
@@ -76,6 +75,15 @@ func (c *Config) setDefaults() {
 	// relative path "./~/backups" and silently write into the CWD.
 	if dir := resolvePath(c.Storage.Dir); dir != "" {
 		c.Storage.Dir = dir
+	}
+	if s3 := c.Storage.S3; s3 != nil {
+		s3.Endpoint = strings.TrimRight(strings.TrimSpace(s3.Endpoint), "/")
+		s3.Bucket = strings.TrimSpace(s3.Bucket)
+		if p := strings.Trim(strings.TrimSpace(s3.Prefix), "/"); p != "" {
+			s3.Prefix = p + "/"
+		} else {
+			s3.Prefix = ""
+		}
 	}
 	if c.Retention.Daily == 0 {
 		c.Retention.Daily = DefaultRetentionD
@@ -136,13 +144,32 @@ func (c *Config) Validate() error {
 	if c.Concurrency < 1 {
 		return errors.New("concurrency must be >= 1")
 	}
-	if strings.TrimSpace(c.Storage.Dir) == "" {
-		return errors.New("storage.dir could not be resolved to an absolute path")
+	if s3 := c.Storage.S3; s3 != nil {
+		if err := validateS3(s3); err != nil {
+			return err
+		}
 	}
 	for name, s := range c.Servers {
 		if err := validateServer(name, s); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateS3(s *model.S3Spec) error {
+	if s.Endpoint == "" {
+		return errors.New("storage.s3.endpoint is required (e.g. https://s3.eu-central-1.amazonaws.com)")
+	}
+	u, err := url.Parse(s.Endpoint)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return fmt.Errorf("storage.s3.endpoint must be a URL starting with https:// or http://: got %q", s.Endpoint)
+	}
+	if u.Path != "" || u.RawQuery != "" {
+		return fmt.Errorf("storage.s3.endpoint must not contain a path: got %q (put the bucket in storage.s3.bucket)", s.Endpoint)
+	}
+	if s.Bucket == "" {
+		return errors.New("storage.s3.bucket is required")
 	}
 	return nil
 }
