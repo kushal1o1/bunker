@@ -44,11 +44,19 @@ func ManifestPath(snapshotDir string) string {
 }
 
 func WriteManifest(path string, m *Manifest) error {
-	data, err := json.MarshalIndent(m, "", "  ")
+	data, err := marshalManifest(m)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600)
+	return os.WriteFile(path, data, 0o600)
+}
+
+func marshalManifest(m *Manifest) ([]byte, error) {
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
 }
 
 // ReadManifest loads a snapshot manifest and validates the fields that
@@ -63,6 +71,12 @@ func ReadManifest(path string) (*Manifest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read manifest %s: %w", path, err)
 	}
+	return ParseManifest(data, path)
+}
+
+// ParseManifest applies ReadManifest's checks to manifest bytes from any
+// store. path only names the manifest in error messages.
+func ParseManifest(data []byte, path string) (*Manifest, error) {
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parse manifest %s: %w", path, err)

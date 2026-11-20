@@ -176,7 +176,6 @@ servers:
         - /var/www/project1/uploads
 %s
 storage:
-  type: local
   dir: %s
 
 encryption:
