@@ -26,8 +26,12 @@ servers:
         # port: 5432
 
 storage:
-  type: local
   dir: ./backups
+  # optional offsite copy; credentials come from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+  # s3:
+  #   endpoint: https://s3.eu-central-1.amazonaws.com
+  #   bucket: my-bunker
+  #   prefix: prod/
 
 encryption:
   identity: ~/.config/bunker/key.txt

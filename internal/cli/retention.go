@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -27,9 +29,10 @@ func newRetentionApplyCmd() *cobra.Command {
 		Use:   "apply [server...]",
 		Short: "show which snapshots the policy keeps; delete the rest with --yes",
 		Long: `Apply the retention policy (daily / weekly / monthly in bunker.yaml) to
-local snapshots. Without --yes it only prints KEEP / DELETE per snapshot and
-removes nothing. The newest snapshot is always kept, and folders without a
-valid manifest are skipped, never deleted.`,
+stored snapshots. Without --yes it only prints KEEP / DELETE per snapshot and
+removes nothing. The newest snapshot is always kept, and snapshots without a
+valid manifest are skipped, never deleted. With both local and S3 storage, a
+snapshot is deleted from both.`,
 		Example: `  # preview every server
   bunker retention apply
 
@@ -62,14 +65,14 @@ func runRetention(cmd *cobra.Command, args []string, yes bool) error {
 		return err
 	}
 
-	targets := args
-	if len(targets) == 0 {
-		targets = cfg.ServerNames()
+	targets, err := targetServers(cfg, args)
+	if err != nil {
+		return err
 	}
-	for _, name := range targets {
-		if _, ok := cfg.Servers[name]; !ok {
-			return fmt.Errorf("unknown server %q (try: bunker server list)", name)
-		}
+	ctx := cmd.Context()
+	stores, err := openStores(ctx, cfg, false)
+	if err != nil {
+		return err
 	}
 
 	policy := retention.Policy{
@@ -83,7 +86,7 @@ func runRetention(cmd *cobra.Command, args []string, yes bool) error {
 	var freed int64
 	for _, name := range targets {
 		fmt.Println()
-		snaps, err := backup.ListSnapshots(cfg.Storage.Dir, name)
+		snaps, err := listMerged(ctx, stores, name)
 		if err != nil {
 			return err
 		}
@@ -92,29 +95,31 @@ func runRetention(cmd *cobra.Command, args []string, yes bool) error {
 			continue
 		}
 
-		byID := map[string]backup.SnapshotInfo{}
+		// A snapshot takes part when at least one copy is complete; one
+		// with no complete copy anywhere is left for a human to look at.
+		byID := map[string]snapRow{}
 		var items []retention.Item
 		var rows []retentionRow
 		for _, s := range snaps {
-			if s.Status != backup.Complete {
-				rows = append(rows, retentionRow{id: s.ID, size: "-", action: "skip", why: s.Status.String()})
+			if !s.complete() {
+				rows = append(rows, retentionRow{id: s.id, size: "-", action: "skip", why: s.best().Status.String()})
 				continue
 			}
-			byID[s.ID] = s
-			items = append(items, retention.Item{ID: s.ID, Time: s.Created})
+			byID[s.id] = s
+			items = append(items, retention.Item{ID: s.id, Time: s.created})
 		}
 
 		var keep, del int
 		for _, d := range retention.Apply(policy, items) {
 			s := byID[d.ID]
-			row := retentionRow{id: d.ID, size: backup.HumanBytes(s.Size()), action: "keep", why: strings.Join(d.Reasons, ", ")}
+			row := retentionRow{id: d.ID, size: backup.HumanBytes(s.size()), action: "keep", why: strings.Join(d.Reasons, ", ")}
 			if !d.Keep {
 				del++
 				toDelete++
-				freed += s.Size()
+				freed += s.size()
 				row.action = "delete"
 				if yes {
-					if err := backup.DeleteSnapshot(cfg.Storage.Dir, name, d.ID); err != nil {
+					if err := deleteEverywhere(ctx, stores, name, s); err != nil {
 						failed++
 						row.action, row.why = "FAILED", err.Error()
 					} else {
@@ -152,4 +157,17 @@ func runRetention(cmd *cobra.Command, args []string, yes bool) error {
 		fmt.Printf("Deleted %d snapshot(s), freed %s.\n", toDelete, backup.HumanBytes(freed))
 	}
 	return nil
+}
+
+// deleteEverywhere removes every copy of a snapshot. Copies are deleted
+// independently, so one failing store does not leave the other untouched.
+func deleteEverywhere(ctx context.Context, stores *backup.Stores, server string, s snapRow) error {
+	var errs []error
+	if s.local != nil {
+		errs = append(errs, stores.Local.Delete(ctx, server, s.id))
+	}
+	if s.remote != nil {
+		errs = append(errs, stores.Remote.Delete(ctx, server, s.id))
+	}
+	return errors.Join(errs...)
 }

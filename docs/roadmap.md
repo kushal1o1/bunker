@@ -2,7 +2,9 @@
 
 ## Done
 
-- PostgreSQL and files, to local disk
+- PostgreSQL and files
+- Storage: local disk, S3-compatible (AWS S3, Cloudflare R2, Backblaze B2,
+  MinIO), or both, plus `storage sync`
 - zstd + age encryption, SHA-256 manifest per snapshot
 - `backup run`, `backup list`, `backup verify`, `retention apply`
 - Many servers in parallel, progress table, summary
@@ -10,11 +12,10 @@
 
 ## Next
 
-1. S3-compatible storage (AWS S3, Cloudflare R2, Backblaze B2, MinIO)
-2. Back up with the public key only, so the backup machine cannot read backups
-3. Docker: Postgres and paths inside containers, then named volumes
-4. `backup restore` to a local folder
-5. `server check`, `status`, `--json`, failure notifications
+1. Back up with the public key only, so the backup machine cannot read backups
+2. Docker: Postgres and paths inside containers, then named volumes
+3. `backup restore` to a local folder
+4. `server check`, `status`, `--json`, failure notifications
 
 ## Agent mode
 

@@ -132,3 +132,35 @@ func TestDedupe(t *testing.T) {
 		t.Fatalf("dedupe = %v, want %v", got, want)
 	}
 }
+
+func TestRenderUploadStates(t *testing.T) {
+	now := time.Now()
+	states := []*serverState{
+		{name: "web-01", phase: phaseUploading, index: 2, total: 3, started: now.Add(-4 * time.Second)},
+		{name: "web-02", phase: phaseDone, count: 2, size: 2048, elapsed: time.Second, upErr: errors.New("s3: access denied")},
+	}
+	got := renderTable(states, now)
+	want := []string{
+		"⟳ web-01  uploading to s3                   2/3                  4s",
+		"✗ web-02  upload failed: s3: access denied  2 artifacts  2.0 KB  1s",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("renderTable =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestPrintSummaryUploadFailure(t *testing.T) {
+	r := okResult("web", "2026-10-17T09-12-03", 1024)
+	r.Result.UploadErr = errors.New("s3: access denied")
+	var buf bytes.Buffer
+	if err := printSummary(&buf, []backup.ServerResult{r}, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	want := `
+1/1 backed up in 1s, 1 upload to s3 failed
+  ✗ web  2026-10-17T09-12-03  1.0 KB  upload failed: s3: access denied
+`
+	if got := buf.String(); got != want {
+		t.Fatalf("printSummary =\n%q\nwant\n%q", got, want)
+	}
+}

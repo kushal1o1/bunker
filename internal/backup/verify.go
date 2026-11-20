@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
 	"path/filepath"
 
 	"filippo.io/age"
@@ -33,7 +34,8 @@ type ArtifactStatus struct {
 type VerifyResult struct {
 	Server    string
 	Snapshot  string
-	Dir       string
+	Dir       string // local snapshot folder, "" for S3
+	Where     string // the store: a path or s3://bucket/prefix
 	Recipient string // recipient recorded in the manifest
 	KeyID     string // recipient of the local identity
 	NoKey     bool
@@ -56,16 +58,22 @@ func (vr *VerifyResult) OK() bool {
 }
 
 type Verifier struct {
-	Cfg  *config.Config
-	Logf func(format string, args ...any)
+	Cfg *config.Config
+	// Store is where the snapshot is read from. Nil means the primary store:
+	// local when there is a local folder, otherwise S3.
+	Store Store
+	Logf  func(format string, args ...any)
 }
 
-// Verify checks one stored snapshot without touching the network:
+// Verify checks one stored snapshot:
 //
-//  1. manifest parses (ReadManifest) and its recipient matches the local identity
+//  1. manifest parses (ParseManifest) and its recipient matches the local identity
 //  2. every artifact exists at the recorded size
 //  3. every artifact's SHA-256 matches the manifest
 //  4. every artifact decrypts and fully zstd-decodes to io.Discard
+//
+// Each artifact is read exactly once: the bytes are hashed and counted while
+// they are decrypted, so an S3 snapshot is downloaded once, never saved.
 //
 // Decrypt is skipped wholesale when no key matches (res.NoKey): retrying
 // twenty files against the wrong recipient would only answer the question the
@@ -80,14 +88,24 @@ func (v *Verifier) Verify(ctx context.Context, server, snapshot string) (*Verify
 	if _, ok := v.Cfg.Servers[server]; !ok {
 		return nil, fmt.Errorf("unknown server %q (try: bunker server list)", server)
 	}
-
-	dir := SnapshotDir(v.Cfg.Storage.Dir, server, snapshot)
-	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
-		return nil, fmt.Errorf("no such snapshot: %s/%s (stored under %s)", server, snapshot, v.Cfg.Storage.Dir)
+	if err := checkNames(server, snapshot); err != nil {
+		return nil, fmt.Errorf("no such snapshot: %s/%s", server, snapshot)
 	}
 
-	man, err := ReadManifest(ManifestPath(dir))
+	store := v.Store
+	if store == nil {
+		stores, err := OpenStores(v.Cfg)
+		if err != nil {
+			return nil, err
+		}
+		store = stores.Primary()
+	}
+
+	man, err := store.Manifest(ctx, server, snapshot)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("no such snapshot: %s/%s in %s (%w)", server, snapshot, store.Where(), err)
+		}
 		return nil, err
 	}
 
@@ -100,33 +118,33 @@ func (v *Verifier) Verify(ctx context.Context, server, snapshot string) (*Verify
 	res := &VerifyResult{
 		Server:    server,
 		Snapshot:  snapshot,
-		Dir:       dir,
+		Where:     store.Where(),
 		Recipient: man.Recipient,
 		KeyID:     keyID,
 		NoKey:     man.Recipient != keyID,
 	}
+	if l, ok := store.(*LocalStore); ok {
+		res.Dir = SnapshotDir(l.Dir, server, snapshot)
+	}
+	decryptWith := id
+	if res.NoKey {
+		decryptWith = nil
+	}
 
 	for _, entry := range man.Artifacts {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
-		st := ArtifactStatus{Entry: entry, Path: filepath.Join(dir, entry.File)}
-		st.SizeOK, st.SumOK, st.Err = verifyFile(ctx, st.Path, entry)
-		if st.Err != nil {
+		st := ArtifactStatus{Entry: entry, Path: artifactPath(store, server, snapshot, entry.File), NoKey: res.NoKey}
+		r, err := store.Open(ctx, server, snapshot, entry.File)
+		if err != nil {
+			st.Err = err
 			res.Artifacts = append(res.Artifacts, st)
 			continue
 		}
-
-		if res.NoKey {
-			st.NoKey = true
-			res.Artifacts = append(res.Artifacts, st)
-			continue
-		}
-
-		st.DecryptOK, st.Err = verifyDecrypt(ctx, st.Path, id)
+		st.SizeOK, st.SumOK, st.DecryptOK, st.Err = checkArtifact(r, entry, decryptWith)
+		r.Close()
 		res.Artifacts = append(res.Artifacts, st)
 	}
 
@@ -141,55 +159,56 @@ func (v *Verifier) Verify(ctx context.Context, server, snapshot string) (*Verify
 	return res, nil
 }
 
-// verifyFile confirms the stored file matches the manifest's size and SHA-256.
-func verifyFile(ctx context.Context, path string, entry ArtifactEntry) (sizeOK, sumOK bool, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, false, fmt.Errorf("open %s: %w", path, err)
+// artifactPath names an artifact for humans: a file path or an s3:// URL.
+func artifactPath(store Store, server, snapshot, file string) string {
+	if l, ok := store.(*LocalStore); ok {
+		return filepath.Join(SnapshotDir(l.Dir, server, snapshot), file)
 	}
-	defer f.Close()
-
-	fi, err := f.Stat()
-	if err != nil {
-		return false, false, fmt.Errorf("stat %s: %w", path, err)
-	}
-	if fi.Size() != entry.Size {
-		return false, false, nil
-	}
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return false, false, fmt.Errorf("hash %s: %w", path, err)
-	}
-	if hex.EncodeToString(h.Sum(nil)) != entry.SHA256 {
-		return true, false, nil
-	}
-	return true, true, nil
+	return store.Where() + server + "/" + snapshot + "/" + file
 }
 
-// verifyDecrypt proves an artifact is genuinely readable: age-decrypt it, then
-// zstd-decode the whole stream to io.Discard. Both formats write headers /
-// trailers only around the real payload, so a partially streamed copy would
-// succeed while the tail is garbage; io.Copy must return without error.
-func verifyDecrypt(ctx context.Context, path string, id *age.X25519Identity) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return false, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
+// checkArtifact reads one artifact once. The bytes are counted and hashed as
+// they pass through decryption, and whatever decryption did not consume is
+// drained afterwards, so size and SHA-256 always cover the whole file even
+// when decryption stops early on corrupt data.
+//
+// id is nil when no key matches; then only size and SHA-256 are checked.
+// Decryption proves the artifact is readable: age, then zstd to io.Discard.
+// Both formats put headers and trailers around the payload, so a partial copy
+// fails here even if its first bytes look fine.
+func checkArtifact(r io.Reader, entry ArtifactEntry, id *age.X25519Identity) (sizeOK, sumOK, decryptOK bool, err error) {
+	h := sha256.New()
+	counted := &countWriter{}
+	tee := io.TeeReader(r, io.MultiWriter(h, counted))
 
-	r, err := age.Decrypt(f, id)
-	if err != nil {
-		return false, fmt.Errorf("age decrypt: %w", err)
+	var decErr error
+	if id != nil {
+		decErr = decrypt(tee, id)
 	}
-	zr, err := zstd.NewReader(r)
+	if _, err := io.Copy(io.Discard, tee); err != nil {
+		return false, false, false, fmt.Errorf("read %s: %w", entry.File, err)
+	}
+
+	sizeOK = counted.n == entry.Size
+	sumOK = sizeOK && hex.EncodeToString(h.Sum(nil)) == entry.SHA256
+	if id == nil {
+		return sizeOK, sumOK, false, nil
+	}
+	return sizeOK, sumOK, decErr == nil, decErr
+}
+
+func decrypt(r io.Reader, id *age.X25519Identity) error {
+	ar, err := age.Decrypt(r, id)
 	if err != nil {
-		return false, fmt.Errorf("zstd init: %w", err)
+		return fmt.Errorf("age decrypt: %w", err)
+	}
+	zr, err := zstd.NewReader(ar)
+	if err != nil {
+		return fmt.Errorf("zstd init: %w", err)
 	}
 	defer zr.Close()
-
 	if _, err := io.Copy(io.Discard, zr); err != nil {
-		return false, fmt.Errorf("decompress: %w", err)
+		return fmt.Errorf("decompress: %w", err)
 	}
-	return true, nil
+	return nil
 }

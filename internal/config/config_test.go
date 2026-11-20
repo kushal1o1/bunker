@@ -37,8 +37,8 @@ servers:
 	if cfg.Concurrency != DefaultConcurrency {
 		t.Errorf("concurrency = %d, want %d", cfg.Concurrency, DefaultConcurrency)
 	}
-	if cfg.Storage.Type != DefaultStorageType {
-		t.Errorf("storage type = %q, want %q", cfg.Storage.Type, DefaultStorageType)
+	if cfg.Storage.S3 != nil {
+		t.Errorf("storage.s3 = %+v, want nil by default", cfg.Storage.S3)
 	}
 	// The default is "~/<x>", so it must arrive fully expanded and absolute --
 	// never the literal "~/<x>", which would resolve relative to the CWD.
@@ -277,6 +277,70 @@ servers:
 			}
 			if got := cfg.Servers["vps-01"].SSH.KeepAliveInterval; got != tc.want {
 				t.Errorf("keepalive_interval = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStorageLocations(t *testing.T) {
+	const s3Block = `
+  s3:
+    endpoint: https://s3.eu-central-1.amazonaws.com/
+    bucket: my-bunker
+    prefix: /prod`
+	cases := []struct {
+		name      string
+		storage   string // body under storage:, empty for no storage block
+		wantLocal bool
+		wantS3    bool
+		wantErr   string
+	}{
+		{name: "no storage block is local", wantLocal: true},
+		{name: "dir only", storage: "\n  dir: ./b", wantLocal: true},
+		{name: "s3 only", storage: s3Block, wantS3: true},
+		{name: "both", storage: "\n  dir: ./b" + s3Block, wantLocal: true, wantS3: true},
+		{name: "type is gone", storage: "\n  type: local", wantErr: "field type not found"},
+		{name: "no scheme", storage: "\n  s3:\n    endpoint: s3.amazonaws.com\n    bucket: b", wantErr: "https:// or http://"},
+		{name: "path in endpoint", storage: "\n  s3:\n    endpoint: https://s3.amazonaws.com/my-bunker\n    bucket: b", wantErr: "must not contain a path"},
+		{name: "no bucket", storage: "\n  s3:\n    endpoint: https://s3.amazonaws.com", wantErr: "bucket is required"},
+		{name: "no endpoint", storage: "\n  s3:\n    bucket: b", wantErr: "endpoint is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `
+servers:
+  vps-01:
+    host: 203.0.113.10
+    backup:
+      paths: [/srv/data]
+`
+			if tc.storage != "" {
+				body += "storage:" + tc.storage + "\n"
+			}
+			cfg, err := Load(writeTemp(t, "bunker.yaml", body))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := cfg.Storage.Dir != ""; got != tc.wantLocal {
+				t.Errorf("local = %v (dir %q), want %v", got, cfg.Storage.Dir, tc.wantLocal)
+			}
+			if got := cfg.Storage.S3 != nil; got != tc.wantS3 {
+				t.Fatalf("s3 = %v, want %v", got, tc.wantS3)
+			}
+			if tc.wantS3 {
+				s3 := cfg.Storage.S3
+				if s3.Endpoint != "https://s3.eu-central-1.amazonaws.com" {
+					t.Errorf("endpoint = %q, want the trailing slash trimmed", s3.Endpoint)
+				}
+				if s3.Prefix != "prod/" {
+					t.Errorf("prefix = %q, want \"prod/\"", s3.Prefix)
+				}
 			}
 		})
 	}

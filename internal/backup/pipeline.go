@@ -6,8 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"time"
 
 	"filippo.io/age"
@@ -18,14 +16,20 @@ import (
 )
 
 type Result struct {
-	Server    string
-	Snapshot  string
+	Server   string
+	Snapshot string
+	// Dir is the local snapshot folder, or "" when storage is S3 only.
 	Dir       string
 	Artifacts []ArtifactEntry
+	// UploadErr is set when the snapshot was stored locally but copying it
+	// to S3 failed. The local snapshot is complete and usable.
+	UploadErr error
 }
 
 type Runner struct {
 	Cfg *config.Config
+	// Stores is where snapshots go. Nil means open them from Cfg.
+	Stores *Stores
 	// Progress receives events as the run advances. It may be nil. With
 	// several servers running at once it is called from several goroutines,
 	// so it must be safe for concurrent use.
@@ -42,6 +46,8 @@ const (
 	ArtifactStarted
 	// ArtifactDone: one artifact is stored and checksummed.
 	ArtifactDone
+	// Uploading: copying artifact Index of Total from local storage to S3.
+	Uploading
 )
 
 // Event is one progress update from Runner.Run. Index is 1-based within
@@ -60,6 +66,13 @@ func (r *Runner) emit(e Event) {
 	if r.Progress != nil {
 		r.Progress(e)
 	}
+}
+
+func (r *Runner) stores() (*Stores, error) {
+	if r.Stores != nil {
+		return r.Stores, nil
+	}
+	return OpenStores(r.Cfg)
 }
 
 // Run pulls a full snapshot from one server into local storage. It only ever
@@ -87,18 +100,17 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 		return nil, err
 	}
 
-	now := time.Now().UTC()
-	snapshot := NewSnapshotID(now)
-	dir := SnapshotDir(r.Cfg.Storage.Dir, serverName, snapshot)
-	serverDir := filepath.Dir(dir)
-	fail := func(err error) (*Result, error) {
-		os.RemoveAll(dir)
-		os.Remove(serverDir)
+	stores, err := r.stores()
+	if err != nil {
 		return nil, err
 	}
+	store := stores.Primary()
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("create snapshot dir: %w", err)
+	now := time.Now().UTC()
+	snapshot := NewSnapshotID(now)
+	fail := func(err error) (*Result, error) {
+		cleanup(ctx, store, serverName, snapshot)
+		return nil, err
 	}
 
 	man := &Manifest{
@@ -110,134 +122,113 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 	}
 
 	arts := buildArtifacts(spec)
-	var errOut error
 	for i, art := range arts {
-		select {
-		case <-ctx.Done():
-			return fail(ctx.Err())
-		default:
+		if err := ctx.Err(); err != nil {
+			return fail(err)
 		}
-
 		r.emit(Event{Server: serverName, Kind: ArtifactStarted, Artifact: art.ID(), Index: i + 1, Total: len(arts)})
 		start := time.Now()
-		entry, err := pull(ctx, client, art, dir, recipient)
+		entry, err := pull(ctx, client, art, store, serverName, snapshot, recipient)
 		if err != nil {
-			errOut = fmt.Errorf("%s: %w", art.ID(), err)
-			break
+			return fail(fmt.Errorf("%s: %w", art.ID(), err))
 		}
 		man.Artifacts = append(man.Artifacts, entry)
 		r.emit(Event{Server: serverName, Kind: ArtifactDone, Artifact: art.ID(), Index: i + 1, Total: len(arts), Size: entry.Size, Elapsed: time.Since(start)})
 	}
-	if errOut != nil {
-		return fail(errOut)
-	}
 
-	if err := WriteManifest(ManifestPath(dir), man); err != nil {
+	if err := store.PutManifest(ctx, man); err != nil {
 		return fail(fmt.Errorf("write manifest: %w", err))
 	}
 
-	return &Result{
-		Server:    serverName,
-		Snapshot:  snapshot,
-		Dir:       dir,
-		Artifacts: man.Artifacts,
-	}, nil
+	res := &Result{Server: serverName, Snapshot: snapshot, Artifacts: man.Artifacts}
+	if stores.Local != nil {
+		res.Dir = SnapshotDir(r.Cfg.Storage.Dir, serverName, snapshot)
+	}
+	if stores.Both() {
+		// The SSH session is no longer needed; free it before a long upload.
+		client.Close()
+		info := SnapshotInfo{ID: snapshot, Created: now, Status: Complete, Manifest: man}
+		res.UploadErr = CopySnapshot(ctx, stores.Local, stores.Remote, info, serverName, func(i, n int) {
+			r.emit(Event{Server: serverName, Kind: Uploading, Index: i, Total: n})
+		})
+	}
+	return res, nil
 }
 
-// pull streams one artifact off the server: zstd-compress, age-encrypt, write
-// to disk, then checksum the stored file.
-func pull(ctx context.Context, client *sshx.Client, art Artifact, dir string, recipient *age.X25519Recipient) (ArtifactEntry, error) {
+// pull streams one artifact off the server: zstd-compress, age-encrypt, and
+// write to the store, hashing the stored bytes on the way through.
+func pull(ctx context.Context, client *sshx.Client, art Artifact, store Store, server, snapshot string, recipient *age.X25519Recipient) (ArtifactEntry, error) {
 	// Everything that can fail locally is set up *before* the remote command
 	// starts. Once Exec returns, the remote side is already writing into the
 	// SSH stdout pipe; if we then failed on a local error we would have to
 	// tear the process down mid-stream, and pg_dump can block writing into a
 	// full pipe that nothing is draining.
 	rel := art.FilePath()
-	full := filepath.Join(dir, rel)
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		return ArtifactEntry{}, fmt.Errorf("create dir: %w", err)
-	}
-
-	f, err := os.Create(full)
+	w, err := store.Create(ctx, server, snapshot, rel)
 	if err != nil {
-		return ArtifactEntry{}, fmt.Errorf("create file: %w", err)
+		return ArtifactEntry{}, err
 	}
-
-	encW, err := age.Encrypt(f, recipient)
+	h := sha256.New()
+	counted := &countWriter{}
+	encW, err := age.Encrypt(io.MultiWriter(w, h, counted), recipient)
 	if err != nil {
-		f.Close()
+		w.Abort()
 		return ArtifactEntry{}, fmt.Errorf("age encrypt: %w", err)
 	}
 	zw, err := zstd.NewWriter(encW)
 	if err != nil {
-		encW.Close()
-		f.Close()
+		w.Abort()
 		return ArtifactEntry{}, fmt.Errorf("zstd encoder: %w", err)
 	}
 
 	proc, err := client.Exec(ctx, art.Command())
 	if err != nil {
 		zw.Close()
-		encW.Close()
-		f.Close()
+		w.Abort()
 		return ArtifactEntry{}, err
 	}
 	defer proc.Kill()
 
-	_, err = io.Copy(zw, proc.Out)
-	if err != nil {
+	abort := func(err error) (ArtifactEntry, error) {
 		zw.Close()
-		encW.Close()
-		f.Close()
-		return ArtifactEntry{}, fmt.Errorf("stream: %w", err)
+		w.Abort()
+		return ArtifactEntry{}, err
+	}
+	if _, err := io.Copy(zw, proc.Out); err != nil {
+		return abort(fmt.Errorf("stream: %w", err))
 	}
 	if err := zw.Close(); err != nil {
-		encW.Close()
-		f.Close()
-		return ArtifactEntry{}, fmt.Errorf("finalize zstd: %w", err)
+		return abort(fmt.Errorf("finalize zstd: %w", err))
 	}
 	if err := encW.Close(); err != nil {
-		f.Close()
+		w.Abort()
 		return ArtifactEntry{}, fmt.Errorf("finalize age: %w", err)
 	}
-	if err := f.Close(); err != nil {
-		return ArtifactEntry{}, fmt.Errorf("close file: %w", err)
-	}
-
+	// Wait before Commit: a remote command that failed (pg_dump exit 1) must
+	// never leave a committed artifact behind.
 	if err := proc.Wait(); err != nil {
+		w.Abort()
+		return ArtifactEntry{}, err
+	}
+	if err := w.Commit(); err != nil {
+		w.Abort()
 		return ArtifactEntry{}, err
 	}
 
-	sum, size, err := hashFile(full)
-	if err != nil {
-		return ArtifactEntry{}, fmt.Errorf("checksum stored artifact: %w", err)
-	}
 	return ArtifactEntry{
 		ID:     art.ID(),
 		File:   rel,
-		Size:   size,
-		SHA256: hex.EncodeToString(sum),
+		Size:   counted.n,
+		SHA256: hex.EncodeToString(h.Sum(nil)),
 	}, nil
 }
 
-// hashFile returns the SHA-256 and byte length of path.
-//
-// Errors are returned rather than swallowed: the previous version handed back
-// nil on failure, which pull then hex-encoded into an empty string and wrote
-// into manifest.json - a snapshot that looked valid to anything trusting its
-// own recorded checksum.
-func hashFile(path string) ([]byte, int64, error) {
-	h := sha256.New()
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, 0, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-	n, err := io.Copy(h, f)
-	if err != nil {
-		return nil, n, fmt.Errorf("hash %s: %w", path, err)
-	}
-	return h.Sum(nil), n, nil
+// countWriter counts bytes written through it.
+type countWriter struct{ n int64 }
+
+func (c *countWriter) Write(p []byte) (int, error) {
+	c.n += int64(len(p))
+	return len(p), nil
 }
 
 func totalSize(arts []ArtifactEntry) int64 {

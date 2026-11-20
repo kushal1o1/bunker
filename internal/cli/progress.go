@@ -28,6 +28,7 @@ const (
 	phaseWaiting phase = iota
 	phaseConnecting
 	phaseRunning
+	phaseUploading
 	phaseDone
 	phaseFailed
 	phaseCancelled
@@ -45,6 +46,7 @@ type serverState struct {
 	size     int64
 	count    int
 	err      error
+	upErr    error // local snapshot fine, S3 upload failed
 }
 
 // --- live table (terminal) ------------------------------------------------
@@ -139,8 +141,15 @@ func renderTable(states []*serverState, now time.Time) []string {
 			status = truncate(s.artifact, 40)
 			progress = fmt.Sprintf("%d/%d", s.index, s.total)
 			took = fmtDur(now.Sub(s.started))
+		case phaseUploading:
+			status = "uploading to s3"
+			progress = fmt.Sprintf("%d/%d", s.index, s.total)
+			took = fmtDur(now.Sub(s.started))
 		case phaseDone:
 			status = "done"
+			if s.upErr != nil {
+				status = "upload failed: " + truncate(oneLine(s.upErr), 60)
+			}
 			progress = fmt.Sprintf("%d artifact%s", s.count, plural(s.count))
 			size, took = backup.HumanBytes(s.size), fmtDur(s.elapsed)
 		case phaseFailed:
@@ -148,7 +157,7 @@ func renderTable(states []*serverState, now time.Time) []string {
 		case phaseCancelled:
 			status = "cancelled"
 		}
-		fmt.Fprintf(w, "%s %s\t%s\t%s\t%s\t%s\n", symbol(s.phase), s.name, status, progress, size, took)
+		fmt.Fprintf(w, "%s %s\t%s\t%s\t%s\t%s\n", symbol(s), s.name, status, progress, size, took)
 	}
 	w.Flush()
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
@@ -158,11 +167,14 @@ func renderTable(states []*serverState, now time.Time) []string {
 	return lines
 }
 
-func symbol(p phase) string {
-	switch p {
-	case phaseConnecting, phaseRunning:
+func symbol(s *serverState) string {
+	switch s.phase {
+	case phaseConnecting, phaseRunning, phaseUploading:
 		return "⟳"
 	case phaseDone:
+		if s.upErr != nil {
+			return "✗"
+		}
 		return "✓"
 	case phaseFailed, phaseCancelled:
 		return "✗"
@@ -197,6 +209,10 @@ func (l *lineLog) Event(e backup.Event) {
 		l.printf(e.Server, "connecting %s", l.hosts[e.Server])
 	case backup.ArtifactDone:
 		l.printf(e.Server, "ok %s %s %s", e.Artifact, backup.HumanBytes(e.Size), fmtDur(e.Elapsed))
+	case backup.Uploading:
+		if e.Index == 1 {
+			l.printf(e.Server, "uploading to s3")
+		}
 	}
 }
 
@@ -204,6 +220,9 @@ func (l *lineLog) Done(r backup.ServerResult) {
 	switch {
 	case r.Err == nil:
 		l.printf(r.Server, "snapshot %s (%s) in %s", r.Result.Snapshot, backup.HumanBytes(resultSize(r.Result)), fmtDur(r.Elapsed))
+		if r.Result.UploadErr != nil {
+			l.printf(r.Server, "UPLOAD FAILED: %s", oneLine(r.Result.UploadErr))
+		}
 	case errors.Is(r.Err, context.Canceled):
 		l.printf(r.Server, "cancelled")
 	default:
@@ -224,6 +243,8 @@ func applyEvent(s *serverState, e backup.Event) {
 		s.phase, s.started = phaseConnecting, time.Now()
 	case backup.ArtifactStarted:
 		s.phase, s.artifact, s.index, s.total = phaseRunning, e.Artifact, e.Index, e.Total
+	case backup.Uploading:
+		s.phase, s.index, s.total = phaseUploading, e.Index, e.Total
 	}
 }
 
@@ -235,6 +256,7 @@ func applyDone(s *serverState, r backup.ServerResult) {
 	switch {
 	case r.Err == nil:
 		s.phase, s.count, s.size = phaseDone, len(r.Result.Artifacts), resultSize(r.Result)
+		s.upErr = r.Result.UploadErr
 	case errors.Is(r.Err, context.Canceled):
 		s.phase = phaseCancelled
 	default:
@@ -244,17 +266,26 @@ func applyDone(s *serverState, r backup.ServerResult) {
 
 // printSummary is the final report, printed in both output modes.
 func printSummary(w io.Writer, results []backup.ServerResult, elapsed time.Duration) error {
-	ok := 0
+	ok, upFailed := 0, 0
 	for _, r := range results {
 		if r.Err == nil {
 			ok++
+			if r.Result.UploadErr != nil {
+				upFailed++
+			}
 		}
 	}
-	fmt.Fprintf(w, "\n%d/%d backed up in %s\n", ok, len(results), fmtDur(elapsed))
+	fmt.Fprintf(w, "\n%d/%d backed up in %s", ok, len(results), fmtDur(elapsed))
+	if upFailed > 0 {
+		fmt.Fprintf(w, ", %d upload%s to s3 failed", upFailed, plural(upFailed))
+	}
+	fmt.Fprintln(w)
 
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	for _, r := range results {
 		switch {
+		case r.Err == nil && r.Result.UploadErr != nil:
+			fmt.Fprintf(tw, "  ✗ %s\t%s\t%s\tupload failed: %s\n", r.Server, r.Result.Snapshot, backup.HumanBytes(resultSize(r.Result)), oneLine(r.Result.UploadErr))
 		case r.Err == nil:
 			fmt.Fprintf(tw, "  ✓ %s\t%s\t%s\n", r.Server, r.Result.Snapshot, backup.HumanBytes(resultSize(r.Result)))
 		case errors.Is(r.Err, context.Canceled):
