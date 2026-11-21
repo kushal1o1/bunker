@@ -345,3 +345,32 @@ servers:
 		})
 	}
 }
+
+func TestEncryptionRecipient(t *testing.T) {
+	const pub = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p"
+	base := `
+servers:
+  vps-01:
+    host: 203.0.113.10
+    backup:
+      paths: [/srv/project1/media]
+encryption:
+`
+	cfg, err := Load(writeTemp(t, "bunker.yaml", base+"  recipient: \"  "+pub+"  \"\n"))
+	if err != nil {
+		t.Fatalf("valid recipient: %v", err)
+	}
+	if cfg.Encryption.Recipient != pub {
+		t.Errorf("recipient = %q, want it trimmed to %q", cfg.Encryption.Recipient, pub)
+	}
+	if cfg.Encryption.Identity != DefaultIdentity {
+		t.Errorf("identity = %q, want default %q", cfg.Encryption.Identity, DefaultIdentity)
+	}
+
+	for _, bad := range []string{"age1nope", "AGE-SECRET-KEY-1QQQ", "ssh-ed25519 AAAA"} {
+		_, err := Load(writeTemp(t, "bunker.yaml", base+"  recipient: \""+bad+"\"\n"))
+		if err == nil || !strings.Contains(err.Error(), "encryption.recipient") {
+			t.Errorf("recipient %q: err = %v, want an encryption.recipient error", bad, err)
+		}
+	}
+}
