@@ -36,8 +36,12 @@ type PostgresSpec struct {
 }
 
 type EncryptionSpec struct {
-	// Identity is the path to the age identity (secret key) used for encryption.
+	// Identity is the path to the age identity (private key). verify needs
+	// it; backup run uses its public half only when Recipient is empty.
 	Identity string `json:"identity" yaml:"identity"`
+	// Recipient is an age public key (age1...). When set, backups are
+	// encrypted to it and the private key does not have to be on this machine.
+	Recipient string `json:"recipient,omitempty" yaml:"recipient,omitempty"`
 }
 
 // StorageSpec says where snapshots go: Dir for a local folder, S3 for a

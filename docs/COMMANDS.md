@@ -37,7 +37,7 @@ hints off with `--no-hints` or by setting `BUNKER_NO_HINTS=1`.
 | Command | Purpose |
 |---|---|
 | [`bunker version`](#version) | print version |
-| [`bunker keygen [--force]`](#keygen) | generate the age encryption identity |
+| [`bunker keygen [--force \| --public]`](#keygen) | generate the age encryption identity, or print its public key |
 | [`bunker server list`](#server-list) | show configured servers |
 | [`bunker backup run [server...]`](#backup-run) | run a backup |
 | [`bunker backup list [server...]`](#backup-list) | list stored snapshots |
@@ -73,6 +73,9 @@ Create the age keypair that encrypts every backup.
 # first-time setup
 bunker keygen
 
+# print the public key, for encryption.recipient
+bunker keygen --public
+
 # rotate the key (old snapshots can no longer be decrypted)
 bunker keygen --force
 ```
@@ -80,24 +83,34 @@ bunker keygen --force
 | Flag | Default | Meaning |
 |---|---|---|
 | `--force` | `false` | replace an existing identity |
+| `--public` | `false` | print only the public key of the existing identity |
 
 ```
 generated age identity at /home/you/.config/bunker/key.txt
 public key: age152wesvp3vuxl3vef6hvedu897zx8pqua4ztm8mn373r75lpzdutq90h5v9
 ```
 
-With `--force` the old and new public keys are both printed, so you can see
-the key changed:
+`--public` prints just the key, so you can copy it into `encryption.recipient`:
 
 ```
-replaced age identity at /home/you/.config/bunker/key.txt (old age152wes... -> age13t6lq...)
+$ bunker keygen --public
+age152wesvp3vuxl3vef6hvedu897zx8pqua4ztm8mn373r75lpzdutq90h5v9
+```
+
+With `--force` the new and the old public key are both printed:
+
+```
+replaced age identity at /home/you/.config/bunker/key.txt
+public key: age13t6lq...
+old public key: age152wes... (snapshots made with it need the old key to verify)
 ```
 
 Notes:
 
 - The identity is written to `encryption.identity` from `bunker.yaml` with
   mode `0600`, inside a `0700` directory.
-- Without `--force`, an existing identity is never overwritten.
+- Without `--force`, an existing identity is never overwritten. `--force`
+  also replaces a key file that cannot be read.
 - **`--force` makes every existing snapshot undecryptable.** The private key is
   not stored anywhere else.
 - `keygen` reads the config first, so it needs a valid `bunker.yaml`.
@@ -161,7 +174,7 @@ Backup plan (1 server):
     - files/var/www/my-project/uploads         tar | zstd | age
 
 Storage: /home/you/backups
-Encryption identity: /home/you/.config/bunker/key.txt
+Encrypt to: age1r7jyfzpdx5x2e70xy8uawy5yx0fk64dfdgxnafkjfsc6eufk64mquw26d2 (from /home/you/.config/bunker/key.txt)
 ```
 
 Real run in a terminal: a live table, one row per server, redrawn in place

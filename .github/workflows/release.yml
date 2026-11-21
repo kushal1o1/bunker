@@ -80,4 +80,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          # Drafting so that We can review and add release notes
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Default notes :)
           generate_release_notes: true

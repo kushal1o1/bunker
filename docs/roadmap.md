@@ -9,13 +9,13 @@
 - `backup run`, `backup list`, `backup verify`, `retention apply`
 - Many servers in parallel, progress table, summary
 - Connect timeout, keepalive, clean `Ctrl-C`
+- Back up with the public key only (`encryption.recipient`)
 
 ## Next
 
-1. Back up with the public key only, so the backup machine cannot read backups
-2. Docker: Postgres and paths inside containers, then named volumes
-3. `backup restore` to a local folder
-4. `server check`, `status`, `--json`, failure notifications
+1. Docker: Postgres and paths inside containers, then named volumes
+2. `backup restore` to a local folder
+3. `server check`, `status`, `--json`, failure notifications
 
 ## Agent mode
 

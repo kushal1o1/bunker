@@ -95,7 +95,7 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 	}
 	defer client.Close()
 
-	recipient, err := LoadRecipient(pathexp.Expand(r.Cfg.Encryption.Identity))
+	recipient, err := ResolveRecipient(r.Cfg.Encryption)
 	if err != nil {
 		return nil, err
 	}

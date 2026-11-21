@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/age"
 	"github.com/kushal1o1/bunker/internal/model"
 	"github.com/kushal1o1/bunker/internal/pathexp"
 	"gopkg.in/yaml.v3"
@@ -97,6 +98,7 @@ func (c *Config) setDefaults() {
 	if c.Encryption.Identity == "" {
 		c.Encryption.Identity = DefaultIdentity
 	}
+	c.Encryption.Recipient = strings.TrimSpace(c.Encryption.Recipient)
 
 	for name := range c.Servers {
 		s := c.Servers[name]
@@ -147,6 +149,11 @@ func (c *Config) Validate() error {
 	if s3 := c.Storage.S3; s3 != nil {
 		if err := validateS3(s3); err != nil {
 			return err
+		}
+	}
+	if r := c.Encryption.Recipient; r != "" {
+		if _, err := age.ParseX25519Recipient(r); err != nil {
+			return fmt.Errorf("encryption.recipient %q is not an age public key (age1...): %w", r, err)
 		}
 	}
 	for name, s := range c.Servers {

@@ -165,8 +165,11 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 		return nil
 	}
 
-	// Open storage before any SSH: a missing bucket or credentials should
-	// fail once, not once per server.
+	// Check the key and open storage before any SSH: a bad key, a missing
+	// bucket or missing credentials should fail once, not once per server.
+	if _, err := backup.ResolveRecipient(cfg.Encryption); err != nil {
+		return err
+	}
 	stores, err := openStores(cmd.Context(), cfg, true)
 	if err != nil {
 		return err
@@ -267,7 +270,15 @@ func printPlan(cfg *config.Config, targets []string) error {
 	if s3 := cfg.Storage.S3; s3 != nil {
 		fmt.Printf("Storage: s3://%s/%s (%s)\n", s3.Bucket, s3.Prefix, s3.Endpoint)
 	}
-	fmt.Println("Encryption identity: " + cfg.Encryption.Identity)
+	rcpt, err := backup.ResolveRecipient(cfg.Encryption)
+	if err != nil {
+		return err
+	}
+	if cfg.Encryption.Recipient != "" {
+		fmt.Println("Encrypt to: " + rcpt.String() + " (encryption.recipient)")
+	} else {
+		fmt.Println("Encrypt to: " + rcpt.String() + " (from " + cfg.Encryption.Identity + ")")
+	}
 	return nil
 }
 
