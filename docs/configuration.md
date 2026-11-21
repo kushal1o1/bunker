@@ -55,6 +55,7 @@ storage:
 
 encryption:
   identity: ~/.config/bunker/key.txt
+  # recipient: age1...             # optional: back up with the public key only
 
 retention:
   daily: 7
@@ -111,7 +112,8 @@ Where you set a location is where snapshots go. See [Storage](#storage-local-s3-
 
 | Field | Type | Default | Required | Notes |
 |---|---|---|---|---|
-| `encryption.identity` | path | `~/.config/bunker/key.txt` | no | age identity created by `bunker keygen`; its public key encrypts backups, its private key decrypts them for verify |
+| `encryption.identity` | path | `~/.config/bunker/key.txt` | no | private key from `bunker keygen`; verify decrypts with it. Without `recipient`, its public key also encrypts backups |
+| `encryption.recipient` | string | none | no | age public key (`age1...`). Backups are encrypted to it, so the private key is not needed on this machine. See [Public key only](#back-up-with-the-public-key-only) |
 
 ### retention
 
@@ -336,6 +338,24 @@ code `1` so cron notices, and `bunker storage sync` uploads it later.
   after a day. bunker cleans up after a failed upload, but a crash or a lost
   network can leave parts behind, and providers charge for them.
 
+## Back up with the public key only
+
+The private key can read every backup. To keep it off the machine that runs
+backups:
+
+1. Run `bunker keygen` on your laptop. It prints the public key (`age1...`).
+   `bunker keygen --public` prints it again later.
+2. On the backup machine, set only that:
+   ```yaml
+   encryption:
+     recipient: age1...
+   ```
+3. Run `backup verify` on the laptop, where the private key is. With S3 this
+   is `backup verify <server> <snapshot> --remote`.
+
+If the identity file also exists on the backup machine, it must match
+`recipient`, or `backup run` stops before connecting.
+
 ## Validation rules
 
 bunker refuses to start when:
@@ -350,4 +370,5 @@ bunker refuses to start when:
 - `concurrency` is less than 1
 - `storage.s3` has no `endpoint` or `bucket`, or the endpoint has no
   `https://` / `http://` or contains a path
+- `encryption.recipient` is not an age public key (`age1...`)
 - the file contains a key bunker does not know
