@@ -164,6 +164,11 @@ func checkNames(server, snapshot string) error {
 	if _, err := time.Parse(snapshotLayout, snapshot); err != nil {
 		return fmt.Errorf("refusing %q: not a snapshot id", snapshot)
 	}
+	return checkServer(server)
+}
+
+// checkServer refuses a server name that is not one plain path element.
+func checkServer(server string) error {
 	if server == "" || server != filepath.Base(server) || server == "." || server == ".." {
 		return fmt.Errorf("refusing server %q: not a plain name", server)
 	}

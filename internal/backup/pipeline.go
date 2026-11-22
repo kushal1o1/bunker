@@ -107,39 +107,11 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 	}
 	store := stores.Primary()
 
-	now := time.Now().UTC()
-	snapshot := NewSnapshotID(now)
-	fail := func(err error) (*Result, error) {
-		cleanup(ctx, store, serverName, snapshot)
+	man, err := TakeSnapshot(ctx, sshExecutor{client}, store, serverName, buildArtifacts(spec), recipient, r.emit)
+	if err != nil {
 		return nil, err
 	}
-
-	man := &Manifest{
-		Server:    serverName,
-		Snapshot:  snapshot,
-		CreatedAt: now.Format(time.RFC3339),
-		Recipient: recipient.String(),
-		Artifacts: nil,
-	}
-
-	arts := buildArtifacts(spec)
-	for i, art := range arts {
-		if err := ctx.Err(); err != nil {
-			return fail(err)
-		}
-		r.emit(Event{Server: serverName, Kind: ArtifactStarted, Artifact: art.ID(), Index: i + 1, Total: len(arts)})
-		start := time.Now()
-		entry, err := pull(ctx, sshExecutor{client}, art, store, serverName, snapshot, recipient)
-		if err != nil {
-			return fail(fmt.Errorf("%s: %w", art.ID(), err))
-		}
-		man.Artifacts = append(man.Artifacts, entry)
-		r.emit(Event{Server: serverName, Kind: ArtifactDone, Artifact: art.ID(), Index: i + 1, Total: len(arts), Size: entry.Size, Elapsed: time.Since(start)})
-	}
-
-	if err := store.PutManifest(ctx, man); err != nil {
-		return fail(fmt.Errorf("write manifest: %w", err))
-	}
+	snapshot := man.Snapshot
 
 	res := &Result{Server: serverName, Snapshot: snapshot, Artifacts: man.Artifacts}
 	if stores.Local != nil {
@@ -148,12 +120,58 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 	if stores.Both() {
 		// The SSH session is no longer needed; free it before a long upload.
 		client.Close()
-		info := SnapshotInfo{ID: snapshot, Created: now, Status: Complete, Manifest: man}
+		created, _ := time.Parse(snapshotLayout, snapshot)
+		info := SnapshotInfo{ID: snapshot, Created: created, Status: Complete, Manifest: man}
 		res.UploadErr = CopySnapshot(ctx, stores.Local, stores.Remote, info, serverName, func(i, n int) {
 			r.emit(Event{Server: serverName, Kind: Uploading, Index: i, Total: n})
 		})
 	}
 	return res, nil
+}
+
+// TakeSnapshot runs each artifact's command through ex and stores the
+// result as one new snapshot of server: artifacts first, manifest.json last,
+// so the snapshot only counts once it is whole. On any failure, including
+// ctx being cancelled, the partial snapshot is deleted (best effort) and the
+// error returned. emit may be nil. Pull mode and the agent both use it.
+func TakeSnapshot(ctx context.Context, ex execx.Executor, store Store, server string, arts []Artifact, recipient *age.X25519Recipient, emit func(Event)) (*Manifest, error) {
+	if emit == nil {
+		emit = func(Event) {}
+	}
+	if len(arts) == 0 {
+		return nil, fmt.Errorf("%s: nothing to back up", server)
+	}
+	now := time.Now().UTC()
+	snapshot := NewSnapshotID(now)
+	fail := func(err error) (*Manifest, error) {
+		cleanup(ctx, store, server, snapshot)
+		return nil, err
+	}
+
+	man := &Manifest{
+		Server:    server,
+		Snapshot:  snapshot,
+		CreatedAt: now.Format(time.RFC3339),
+		Recipient: recipient.String(),
+	}
+	for i, art := range arts {
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
+		emit(Event{Server: server, Kind: ArtifactStarted, Artifact: art.ID(), Index: i + 1, Total: len(arts)})
+		start := time.Now()
+		entry, err := pull(ctx, ex, art, store, server, snapshot, recipient)
+		if err != nil {
+			return fail(fmt.Errorf("%s: %w", art.ID(), err))
+		}
+		man.Artifacts = append(man.Artifacts, entry)
+		emit(Event{Server: server, Kind: ArtifactDone, Artifact: art.ID(), Index: i + 1, Total: len(arts), Size: entry.Size, Elapsed: time.Since(start)})
+	}
+
+	if err := store.PutManifest(ctx, man); err != nil {
+		return fail(fmt.Errorf("write manifest: %w", err))
+	}
+	return man, nil
 }
 
 // pull streams one artifact off the server: zstd-compress, age-encrypt, and

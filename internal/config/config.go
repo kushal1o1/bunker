@@ -78,13 +78,7 @@ func (c *Config) setDefaults() {
 		c.Storage.Dir = dir
 	}
 	if s3 := c.Storage.S3; s3 != nil {
-		s3.Endpoint = strings.TrimRight(strings.TrimSpace(s3.Endpoint), "/")
-		s3.Bucket = strings.TrimSpace(s3.Bucket)
-		if p := strings.Trim(strings.TrimSpace(s3.Prefix), "/"); p != "" {
-			s3.Prefix = p + "/"
-		} else {
-			s3.Prefix = ""
-		}
+		NormalizeS3(s3)
 	}
 	if c.Retention.Daily == 0 {
 		c.Retention.Daily = DefaultRetentionD
@@ -147,7 +141,7 @@ func (c *Config) Validate() error {
 		return errors.New("concurrency must be >= 1")
 	}
 	if s3 := c.Storage.S3; s3 != nil {
-		if err := validateS3(s3); err != nil {
+		if err := ValidateS3(s3); err != nil {
 			return err
 		}
 	}
@@ -164,7 +158,20 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func validateS3(s *model.S3Spec) error {
+// NormalizeS3 trims the endpoint and bucket and turns prefix into "" or
+// "x/". The agent config shares it.
+func NormalizeS3(s3 *model.S3Spec) {
+	s3.Endpoint = strings.TrimRight(strings.TrimSpace(s3.Endpoint), "/")
+	s3.Bucket = strings.TrimSpace(s3.Bucket)
+	if p := strings.Trim(strings.TrimSpace(s3.Prefix), "/"); p != "" {
+		s3.Prefix = p + "/"
+	} else {
+		s3.Prefix = ""
+	}
+}
+
+// ValidateS3 checks a normalized S3 spec. The agent config shares it.
+func ValidateS3(s *model.S3Spec) error {
 	if s.Endpoint == "" {
 		return errors.New("storage.s3.endpoint is required (e.g. https://s3.eu-central-1.amazonaws.com)")
 	}

@@ -24,15 +24,22 @@ type PostgresArtifact struct {
 	// Optional pg_dump connection overrides passed as -h/-p/-U.
 	User, Host string
 	Port       int
+	// Group, when set, is a folder between "postgres/" and the database, so
+	// several Postgres servers can each have a database with the same name.
+	// The agent sets it; pull mode leaves it empty.
+	Group string
 }
 
-func (a *PostgresArtifact) ID() string {
+func (a *PostgresArtifact) name() string {
+	if a.Group != "" {
+		return "postgres/" + a.Group + "/" + a.DB
+	}
 	return "postgres/" + a.DB
 }
 
-func (a *PostgresArtifact) FilePath() string {
-	return "postgres/" + a.DB + ".dump.zst.age"
-}
+func (a *PostgresArtifact) ID() string { return a.name() }
+
+func (a *PostgresArtifact) FilePath() string { return a.name() + ".dump.zst.age" }
 
 func (a *PostgresArtifact) Argv() []string {
 	args := []string{"pg_dump", "-Fc"}
