@@ -45,6 +45,7 @@ hints off with `--no-hints` or by setting `BUNKER_NO_HINTS=1`.
 | [`bunker retention apply [server...]`](#retention-apply) | preview, or with `--yes` delete, snapshots the retention policy drops |
 | [`bunker storage sync [server...]`](#storage-sync) | upload local snapshots that are missing from S3 |
 | [`bunker agent run --once`](#agent-run) | on a server: back it up and push to S3 (agent mode, in development) |
+| [`bunker agent check`](#agent-check) | on a server: confirm the agent can reach every database, path and S3 |
 | `bunker completion <shell>` | generate a shell completion script |
 | `bunker help [command]` | help for any command |
 
@@ -451,3 +452,51 @@ Notes:
 - After every run it writes `<name>/status.json` to S3 with the result.
 - Verify, retention and restore run on your laptop, never on the agent.
 - Exit code `1` if the backup failed.
+
+---
+
+## agent check
+
+Confirms a server is ready for the agent, without taking a backup. Run it as
+the same user, or in the same container, as the agent.
+
+```bash
+# before the first run
+bunker agent check
+
+# inside the agent container
+docker compose run --rm bunker-agent agent check
+```
+
+No flags.
+
+```
+Checking /etc/bunker/agent.yaml (agent web-01)
+
+  OK    config    valid; encrypts to age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+  OK    user      bunker (uid 997)
+  OK    pg_dump   pg_dump (PostgreSQL) 18.1
+  OK    postgres  shop-postgres/app
+  FAIL  postgres  blog-db/app: pg_dump exit 1: password authentication failed for user "bunker"
+  WARN  pgpass    /run/secrets/pgpass is readable by others (0644): pg_dump ignores it; chmod 600 /run/secrets/pgpass
+  OK    path      /data/shop/uploads (1203 file(s))
+  OK    s3        uploaded s3://my-bunker/prod/web-01/check.json
+
+Error: 1 check(s) failed
+```
+
+| Check | What it does |
+|---|---|
+| config | `agent.yaml` is valid; shows the public key backups are encrypted to |
+| user | warns when running as root |
+| pg_dump | found on `PATH`, with its version |
+| postgres | logs in to each database with `pg_dump --schema-only`: same login as a backup, no data read |
+| pgpass | when `PGPASSFILE` or `~/.pgpass` is used: warns if others can read it, since `pg_dump` then ignores it |
+| path | every file under the path can be read |
+| s3 | uploads `<name>/check.json`, proving the upload key works |
+
+Notes:
+
+- Exit code `1` if any check fails. Warnings do not fail.
+- `check.json` is overwritten by the next check. The agent's upload-only key
+  cannot delete it, and bunker ignores it everywhere else.
