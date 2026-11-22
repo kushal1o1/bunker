@@ -6,6 +6,10 @@ type ServerSpec struct {
 	Host   string     `json:"host" yaml:"host"`
 	SSH    SSHConfig  `json:"ssh" yaml:"ssh"`
 	Backup BackupSpec `json:"backup" yaml:"backup"`
+	// Agent marks a server that backs itself up with `bunker agent run` and
+	// pushes to S3. This machine never connects to it: pull skips it, while
+	// list, verify, retention and status read its snapshots from S3.
+	Agent bool `json:"agent,omitempty" yaml:"agent,omitempty"`
 }
 
 type SSHConfig struct {

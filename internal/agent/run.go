@@ -43,6 +43,8 @@ type Runner struct {
 }
 
 // RunOnce backs up everything in the config once, then writes status.json.
+// Scheduling is left to the host: a systemd timer or cron runs
+// `bunker agent run` when a backup is due.
 // The returned error is the backup's; a failure to write the status is only
 // logged, since the snapshot itself is what matters.
 func (r *Runner) RunOnce(ctx context.Context) (*Status, error) {

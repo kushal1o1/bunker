@@ -35,8 +35,6 @@ type Spec struct {
 	// Name is this server's folder in S3. The laptop lists, verifies and
 	// prunes it under the same name.
 	Name string `yaml:"name"`
-	// Schedule is a cron expression for `bunker agent run`.
-	Schedule string `yaml:"schedule"`
 }
 
 type BackupSpec struct {
@@ -87,7 +85,6 @@ func Load(p string) (*Config, error) {
 
 func (c *Config) normalize() {
 	c.Agent.Name = strings.TrimSpace(c.Agent.Name)
-	c.Agent.Schedule = strings.TrimSpace(c.Agent.Schedule)
 	c.Encryption.Recipient = strings.TrimSpace(c.Encryption.Recipient)
 	if c.Storage.S3 != nil {
 		config.NormalizeS3(c.Storage.S3)

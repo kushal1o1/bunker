@@ -28,7 +28,8 @@ func newServerListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "list configured servers",
 		Long: `Print every server in bunker.yaml with its host, SSH user and port, and
-what it backs up, after defaults are applied. Reads the config only and
+what it backs up, after defaults are applied. Servers with agent: true show
+"agent": what they back up is in agent.yaml on the server. Reads the config only and
 connects to nothing, so it is the first thing to run when a config is wrong.`,
 		Example: `  bunker server list
 
@@ -50,6 +51,10 @@ func printServers(cfg *config.Config) error {
 	fmt.Fprintln(w, "NAME\tHOST\tSSH\tDB\tPATHS")
 	for _, name := range cfg.ServerNames() {
 		s := cfg.Servers[name]
+		if s.Agent {
+			fmt.Fprintf(w, "%s\tagent\t-\tsee agent.yaml\t-\n", name)
+			continue
+		}
 
 		db := "-"
 		if s.Backup.Postgres != nil {

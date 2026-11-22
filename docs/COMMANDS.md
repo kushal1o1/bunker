@@ -44,7 +44,8 @@ hints off with `--no-hints` or by setting `BUNKER_NO_HINTS=1`.
 | [`bunker backup verify <server> <snapshot>`](#backup-verify) | verify a snapshot's checksums, archive integrity and decryption |
 | [`bunker retention apply [server...]`](#retention-apply) | preview, or with `--yes` delete, snapshots the retention policy drops |
 | [`bunker storage sync [server...]`](#storage-sync) | upload local snapshots that are missing from S3 |
-| [`bunker agent run --once`](#agent-run) | on a server: back it up and push to S3 (agent mode, in development) |
+| [`bunker status [server...]`](#status) | each server's latest snapshot and its agent's last run |
+| [`bunker agent run`](#agent-run) | on a server: back it up and push to S3 (agent mode, in development) |
 | [`bunker agent check`](#agent-check) | on a server: confirm the agent can reach every database, path and S3 |
 | `bunker completion <shell>` | generate a shell completion script |
 | `bunker help [command]` | help for any command |
@@ -142,6 +143,8 @@ Notes:
 
 - `DB` lists `backup.postgres.dbs`, `PATHS` lists `backup.paths`; `-` means
   none.
+- Servers with `agent: true` show `agent` as their host: what they back up is
+  in `agent.yaml` on the server.
 - Reads the config only and connects to nothing, so it is the first thing to
   run when a config is wrong.
 
@@ -374,7 +377,12 @@ Preview only: 1 snapshot(s), 42.0 MB would be deleted. Nothing was removed.
 Notes:
 
 - The newest snapshot is always kept.
-- Folders without a valid manifest are shown as `skip` and never deleted.
+- A snapshot without `manifest.json` that is more than a day old is a run that
+  never finished (a crash, or an agent that cannot delete its own leftovers)
+  and is deleted with `--yes`. A younger one may still be running and is
+  shown as `skip`.
+- A snapshot whose manifest is corrupt is shown as `skip` and never deleted,
+  so you can look at it first.
 - With both local and S3 storage, each snapshot is decided once and deleted
   from both. A snapshot that exists in only one place still counts.
 - See [Retention](retention.md) for exactly how the policy decides.
@@ -418,23 +426,56 @@ Notes:
 
 ---
 
+## status
+
+One row per server: its newest complete snapshot, and for servers with
+`agent: true` the result of the agent's last run, read from S3. Nothing on the
+servers is contacted.
+
+```bash
+# every server
+bunker status
+
+# some servers
+bunker status web-01 db-02
+```
+
+No flags.
+
+```
+SERVER  MODE   LAST SNAPSHOT        AGE   SIZE      LAST RUN
+db-02   pull   2026-11-22T09-12-03  20m   42.0 MB   -
+web-01  agent  2026-11-22T03-00-00  6h    161.6 MB  ok 6h ago
+web-02  agent  2026-11-21T03-00-00  1d6h  80.0 MB   FAILED 6h ago: pg_dump exit 1: password authentication failed for user "bunker"
+
+Error: 1 server(s) need attention
+```
+
+Notes:
+
+- Exit code `1` when a server needs attention: an agent's last run failed, or
+  a server has no complete snapshot. Run it from cron to get told.
+- `no report yet` means the agent has not finished a run.
+- Pull servers show `-` under `LAST RUN`: the snapshot age says it all.
+
+---
+
 ## agent run
 
 Runs on the server itself: back up the databases and paths in `agent.yaml`,
-encrypt with the public key and upload the snapshot to S3. Agent mode is in
-development; today only `--once` works.
+encrypt with the public key and upload the snapshot to S3. It runs once and
+exits: schedule it with a systemd timer or cron on the server. Agent mode is
+in development.
 
 ```bash
 # one backup now (config: /etc/bunker/agent.yaml)
-bunker agent run --once
+bunker agent run
 
 # another config file
-bunker agent run --once -c ./agent.yaml
+bunker agent run -c ./agent.yaml
 ```
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--once` | `false` | run one backup and exit |
+No flags.
 
 ```
 2026-11-22T03:00:00Z web-01: backup started

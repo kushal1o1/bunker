@@ -12,7 +12,6 @@ const testRecipient = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqm
 const validConfig = `
 agent:
   name: web-01
-  schedule: "0 3 * * *"
 backup:
   postgres:
     - host: shop-postgres

@@ -180,6 +180,29 @@ func (s *S3Store) PutServerFile(ctx context.Context, server, name string, data [
 	return nil
 }
 
+// maxServerFile bounds a status.json or check.json read, so a broken or
+// hostile object cannot exhaust memory.
+const maxServerFile = 1 << 20
+
+// GetServerFile reads <prefix><server>/<name>. A missing object is an error
+// wrapping fs.ErrNotExist.
+func (s *S3Store) GetServerFile(ctx context.Context, server, name string) ([]byte, error) {
+	if err := checkServer(server); err != nil {
+		return nil, err
+	}
+	key := s.prefix + server + "/" + name
+	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, s3Err(key, err)
+	}
+	defer obj.Close()
+	data, err := io.ReadAll(io.LimitReader(obj, maxServerFile))
+	if err != nil {
+		return nil, s3Err(key, err)
+	}
+	return data, nil
+}
+
 func (s *S3Store) PutManifest(ctx context.Context, m *Manifest) error {
 	if err := checkNames(m.Server, m.Snapshot); err != nil {
 		return err

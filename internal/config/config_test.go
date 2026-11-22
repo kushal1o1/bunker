@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -372,5 +373,37 @@ encryption:
 		if err == nil || !strings.Contains(err.Error(), "encryption.recipient") {
 			t.Errorf("recipient %q: err = %v, want an encryption.recipient error", bad, err)
 		}
+	}
+}
+
+func TestAgentServers(t *testing.T) {
+	base := `
+servers:
+  db-02:
+    host: 203.0.113.20
+    backup:
+      paths: [/srv/data]
+  web-01:
+    agent: true
+%s`
+	s3 := "storage:\n  s3: {endpoint: https://s3.example.com, bucket: b}\n"
+
+	cfg, err := Load(writeTemp(t, "bunker.yaml", fmt.Sprintf(base, s3)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.PullServers(), ","); got != "db-02" {
+		t.Errorf("PullServers = %s, want db-02", got)
+	}
+	if w := cfg.Servers["web-01"]; w.SSH.Port != 0 || w.SSH.User != "" {
+		t.Errorf("ssh defaults applied to an agent server: %+v", w.SSH)
+	}
+
+	if _, err := Load(writeTemp(t, "bunker.yaml", fmt.Sprintf(base, ""))); err == nil || !strings.Contains(err.Error(), "set storage.s3") {
+		t.Errorf("agent without s3: err = %v", err)
+	}
+	withHost := strings.Replace(base, "    agent: true\n", "    agent: true\n    host: 203.0.113.10\n", 1)
+	if _, err := Load(writeTemp(t, "bunker.yaml", fmt.Sprintf(withHost, s3))); err == nil || !strings.Contains(err.Error(), "takes no host") {
+		t.Errorf("agent with host: err = %v", err)
 	}
 }

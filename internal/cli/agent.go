@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"text/tabwriter"
 
@@ -39,29 +38,27 @@ func newAgentCmd() *cobra.Command {
 }
 
 func newAgentRunCmd() *cobra.Command {
-	var once bool
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "back up this machine to s3",
+		Short: "back up this machine to s3 once",
 		Long: `Back up the databases and paths in agent.yaml on this machine, encrypt them
 with encryption.recipient (the public key) and upload the snapshot to S3.
-After every run, <name>/status.json in S3 records the result.
+After every run, <name>/status.json in S3 records the result. Exits 1 if the
+backup failed.
+
+It runs once and exits. Schedule it with a systemd timer or cron on the
+server, as pull mode is scheduled on your machine.
 
 The agent never holds the private key and never deletes old snapshots: verify,
 retention and restore run on your laptop. The config is
-` + agent.DefaultConfigPath + ` unless -c is given.
-
---once runs one backup and exits with 1 if it failed.`,
+` + agent.DefaultConfigPath + ` unless -c is given.`,
 		Example: `  # one backup now
-  bunker agent run --once
+  bunker agent run
 
   # with another config file
-  bunker agent run --once -c ./agent.yaml`,
+  bunker agent run -c ./agent.yaml`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if !once {
-				return errors.New("scheduled runs are not available yet: use --once (from cron or a systemd timer)")
-			}
 			cfg, err := agent.Load(agentConfigPath(cmd))
 			if err != nil {
 				return err
@@ -82,7 +79,6 @@ retention and restore run on your laptop. The config is
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&once, "once", false, "run one backup and exit")
 	return cmd
 }
 
