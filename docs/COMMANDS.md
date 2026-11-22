@@ -44,6 +44,7 @@ hints off with `--no-hints` or by setting `BUNKER_NO_HINTS=1`.
 | [`bunker backup verify <server> <snapshot>`](#backup-verify) | verify a snapshot's checksums, archive integrity and decryption |
 | [`bunker retention apply [server...]`](#retention-apply) | preview, or with `--yes` delete, snapshots the retention policy drops |
 | [`bunker storage sync [server...]`](#storage-sync) | upload local snapshots that are missing from S3 |
+| [`bunker agent run --once`](#agent-run) | on a server: back it up and push to S3 (agent mode, in development) |
 | `bunker completion <shell>` | generate a shell completion script |
 | `bunker help [command]` | help for any command |
 
@@ -413,3 +414,40 @@ Notes:
   once it is whole. A failed copy is removed from S3.
 - Snapshots without a valid local manifest are skipped.
 - Exit code `1` if any upload failed.
+
+---
+
+## agent run
+
+Runs on the server itself: back up the databases and paths in `agent.yaml`,
+encrypt with the public key and upload the snapshot to S3. Agent mode is in
+development; today only `--once` works.
+
+```bash
+# one backup now (config: /etc/bunker/agent.yaml)
+bunker agent run --once
+
+# another config file
+bunker agent run --once -c ./agent.yaml
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--once` | `false` | run one backup and exit |
+
+```
+2026-11-22T03:00:00Z web-01: backup started
+2026-11-22T03:00:00Z web-01: [1/2] postgres/shop-postgres/app
+2026-11-22T03:00:04Z web-01: [1/2] postgres/shop-postgres/app done, 41.2 MB in 3.9s
+2026-11-22T03:00:04Z web-01: [2/2] files/data/shop/uploads
+2026-11-22T03:00:09Z web-01: [2/2] files/data/shop/uploads done, 120.4 MB in 5.1s
+2026-11-22T03:00:09Z web-01: snapshot 2026-11-22T03-00-00 complete: 2 artifact(s), 161.6 MB in 9.2s
+```
+
+Notes:
+
+- The agent needs `encryption.recipient` and `storage.s3`. It refuses a
+  private key and local storage.
+- After every run it writes `<name>/status.json` to S3 with the result.
+- Verify, retention and restore run on your laptop, never on the agent.
+- Exit code `1` if the backup failed.

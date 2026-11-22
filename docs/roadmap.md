@@ -16,6 +16,7 @@
 1. Docker: Postgres and paths inside containers, then named volumes
 2. `backup restore` to a local folder
 3. `server check`, `status`, `--json`, failure notifications
+4. Resumable uploads: skip artifacts already in S3
 
 ## Agent mode
 
