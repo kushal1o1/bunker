@@ -11,6 +11,7 @@ import (
 	"filippo.io/age"
 	"github.com/klauspost/compress/zstd"
 	"github.com/kushal1o1/bunker/internal/config"
+	"github.com/kushal1o1/bunker/internal/execx"
 	"github.com/kushal1o1/bunker/internal/pathexp"
 	"github.com/kushal1o1/bunker/internal/sshx"
 )
@@ -128,7 +129,7 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 		}
 		r.emit(Event{Server: serverName, Kind: ArtifactStarted, Artifact: art.ID(), Index: i + 1, Total: len(arts)})
 		start := time.Now()
-		entry, err := pull(ctx, client, art, store, serverName, snapshot, recipient)
+		entry, err := pull(ctx, sshExecutor{client}, art, store, serverName, snapshot, recipient)
 		if err != nil {
 			return fail(fmt.Errorf("%s: %w", art.ID(), err))
 		}
@@ -157,12 +158,12 @@ func (r *Runner) Run(ctx context.Context, serverName string) (*Result, error) {
 
 // pull streams one artifact off the server: zstd-compress, age-encrypt, and
 // write to the store, hashing the stored bytes on the way through.
-func pull(ctx context.Context, client *sshx.Client, art Artifact, store Store, server, snapshot string, recipient *age.X25519Recipient) (ArtifactEntry, error) {
-	// Everything that can fail locally is set up *before* the remote command
-	// starts. Once Exec returns, the remote side is already writing into the
-	// SSH stdout pipe; if we then failed on a local error we would have to
-	// tear the process down mid-stream, and pg_dump can block writing into a
-	// full pipe that nothing is draining.
+func pull(ctx context.Context, ex execx.Executor, art Artifact, store Store, server, snapshot string, recipient *age.X25519Recipient) (ArtifactEntry, error) {
+	// Everything that can fail locally is set up *before* the command starts.
+	// Once Exec returns, the command is already writing into its stdout pipe;
+	// if we then failed on a local error we would have to tear the process
+	// down mid-stream, and pg_dump can block writing into a full pipe that
+	// nothing is draining.
 	rel := art.FilePath()
 	w, err := store.Create(ctx, server, snapshot, rel)
 	if err != nil {
@@ -181,7 +182,7 @@ func pull(ctx context.Context, client *sshx.Client, art Artifact, store Store, s
 		return ArtifactEntry{}, fmt.Errorf("zstd encoder: %w", err)
 	}
 
-	proc, err := client.Exec(ctx, art.Command())
+	proc, err := ex.Exec(ctx, art.Argv())
 	if err != nil {
 		zw.Close()
 		w.Abort()
@@ -194,7 +195,7 @@ func pull(ctx context.Context, client *sshx.Client, art Artifact, store Store, s
 		w.Abort()
 		return ArtifactEntry{}, err
 	}
-	if _, err := io.Copy(zw, proc.Out); err != nil {
+	if _, err := io.Copy(zw, proc.Stdout()); err != nil {
 		return abort(fmt.Errorf("stream: %w", err))
 	}
 	if err := zw.Close(); err != nil {
@@ -204,7 +205,7 @@ func pull(ctx context.Context, client *sshx.Client, art Artifact, store Store, s
 		w.Abort()
 		return ArtifactEntry{}, fmt.Errorf("finalize age: %w", err)
 	}
-	// Wait before Commit: a remote command that failed (pg_dump exit 1) must
+	// Wait before Commit: a command that failed (pg_dump exit 1) must
 	// never leave a committed artifact behind.
 	if err := proc.Wait(); err != nil {
 		w.Abort()
@@ -221,6 +222,18 @@ func pull(ctx context.Context, client *sshx.Client, art Artifact, store Store, s
 		Size:   counted.n,
 		SHA256: hex.EncodeToString(h.Sum(nil)),
 	}, nil
+}
+
+// sshExecutor runs artifacts over an SSH connection: argv is quoted for the
+// remote shell.
+type sshExecutor struct{ c *sshx.Client }
+
+func (e sshExecutor) Exec(ctx context.Context, argv []string) (execx.Process, error) {
+	p, err := e.c.Exec(ctx, execx.ShellJoin(argv))
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // countWriter counts bytes written through it.

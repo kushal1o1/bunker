@@ -1,7 +1,6 @@
 package sshx
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kushal1o1/bunker/internal/execx"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -201,50 +201,12 @@ func loadKey(path, passphrase string) (ssh.Signer, error) {
 	return signer, nil
 }
 
-// maxStderr bounds how much remote stderr is buffered for an error message.
-// The buffer is only ever read when a command fails, and a chatty command
-// must not be able to grow it without limit.
-const maxStderr = 64 << 10
-
-// limitedBuffer keeps the first maxStderr bytes and discards the rest, so a
-// runaway remote command cannot exhaust memory while still reporting why it
-// failed.
-type limitedBuffer struct {
-	buf       bytes.Buffer
-	limit     int
-	dropped   int
-	truncated bool
-}
-
-func (l *limitedBuffer) Write(p []byte) (int, error) {
-	if room := l.limit - l.buf.Len(); room > 0 {
-		if len(p) > room {
-			l.buf.Write(p[:room])
-			l.dropped = len(p) - room
-			l.truncated = true
-			return len(p), nil
-		}
-		l.buf.Write(p)
-		return len(p), nil
-	}
-	l.dropped += len(p)
-	l.truncated = true
-	return len(p), nil
-}
-
-func (l *limitedBuffer) String() string {
-	if !l.truncated {
-		return l.buf.String()
-	}
-	return l.buf.String() + fmt.Sprintf("\n... [%d more bytes of remote stderr truncated]", l.dropped)
-}
-
 type Process struct {
 	ctx    context.Context
 	client *Client
 	sess   *ssh.Session
 	Out    io.Reader
-	stderr limitedBuffer
+	stderr execx.LimitedBuffer
 	errCh  chan error
 	stop   func() bool // unregisters the ctx cancel hook
 }
@@ -275,7 +237,7 @@ func (c *Client) Exec(ctx context.Context, command string) (*Process, error) {
 		errCh:  make(chan error, 1),
 	}
 	p.Out = procReader{p: p, r: out}
-	p.stderr.limit = maxStderr
+	p.stderr.Limit = execx.MaxStderr
 	// Must point at the Process field: a throwaway buffer here would discard
 	// every diagnostic a failing remote command emits, which is the only
 	// clue about why it failed.
@@ -293,6 +255,9 @@ func (c *Client) Exec(ctx context.Context, command string) (*Process, error) {
 	}()
 	return p, nil
 }
+
+// Stdout is Out, for execx.Process.
+func (p *Process) Stdout() io.Reader { return p.Out }
 
 // procReader is Process.Out. When the connection was cut by Ctrl-C or by
 // keepAlive, the stdout pipe just ends, which would look like a complete

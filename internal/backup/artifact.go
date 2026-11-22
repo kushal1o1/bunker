@@ -1,22 +1,22 @@
 package backup
 
 import (
-	"fmt"
 	"path"
 	"strconv"
 	"strings"
 )
 
 // Artifact is one unit of backup data from a server. Every kind produces an
-// encrypted, compressed archive file from bytes streamed over SSH. New kinds
-// (MySQL, Mongo, arbitrary commands, ...) plug in by implementing this
-// interface; the pipeline does not change.
+// encrypted, compressed archive file from the stdout of one command. New
+// kinds (MySQL, Mongo, ...) plug in by implementing this interface; the
+// pipeline does not change.
 type Artifact interface {
 	ID() string
 	// FilePath is the archive's path relative to the snapshot directory.
 	FilePath() string
-	// Command is the remote, read-only command whose stdout we stream.
-	Command() string
+	// Argv is the read-only command whose stdout we stream. It is run without
+	// a shell locally, and quoted with execx.ShellJoin over SSH.
+	Argv() []string
 }
 
 type PostgresArtifact struct {
@@ -34,7 +34,7 @@ func (a *PostgresArtifact) FilePath() string {
 	return "postgres/" + a.DB + ".dump.zst.age"
 }
 
-func (a *PostgresArtifact) Command() string {
+func (a *PostgresArtifact) Argv() []string {
 	args := []string{"pg_dump", "-Fc"}
 	if a.Host != "" {
 		args = append(args, "-h", a.Host)
@@ -45,8 +45,7 @@ func (a *PostgresArtifact) Command() string {
 	if a.User != "" {
 		args = append(args, "-U", a.User)
 	}
-	args = append(args, a.DB)
-	return strings.Join(quoteEach(args), " ")
+	return append(args, a.DB)
 }
 
 type FilesArtifact struct {
@@ -63,19 +62,7 @@ func (a *FilesArtifact) FilePath() string {
 	return "files/" + safe + ".tar.zst.age"
 }
 
-func (a *FilesArtifact) Command() string {
+func (a *FilesArtifact) Argv() []string {
 	parent, base := path.Dir(a.RemotePath), path.Base(a.RemotePath)
-	return fmt.Sprintf("tar -C %s -cf - %s", quote(parent), quote(base))
-}
-
-func quote(s string) string {
-	return strconv.Quote(s)
-}
-
-func quoteEach(s []string) []string {
-	out := make([]string, len(s))
-	for i, v := range s {
-		out[i] = quote(v)
-	}
-	return out
+	return []string{"tar", "-C", parent, "-cf", "-", base}
 }

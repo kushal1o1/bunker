@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kushal1o1/bunker/internal/execx"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -176,7 +177,7 @@ func TestExecStderrOnSuccessIsNotAnError(t *testing.T) {
 // The stderr buffer is capped, so a runaway command cannot exhaust memory, and
 // the truncation is reported rather than hidden.
 func TestStderrIsCappedAndReportsTruncation(t *testing.T) {
-	big := strings.Repeat("E", maxStderr+4096)
+	big := strings.Repeat("E", execx.MaxStderr+4096)
 	_, err := runScript(t, reply{stderr: big, exit: 1})
 	if err == nil {
 		t.Fatal("expected an error, got nil")
@@ -185,25 +186,8 @@ func TestStderrIsCappedAndReportsTruncation(t *testing.T) {
 	if !strings.Contains(msg, "truncated") {
 		t.Errorf("error = %q, want it to mention truncation", msg)
 	}
-	if len(msg) > maxStderr+1024 {
-		t.Errorf("error is %d bytes, want it bounded near maxStderr (%d)", len(msg), maxStderr)
-	}
-}
-
-func TestLimitedBufferKeepsPrefixAndCountsDropped(t *testing.T) {
-	var l limitedBuffer
-	l.limit = 10
-	if _, err := l.Write([]byte("0123456789ABCDEF")); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	if !strings.HasPrefix(l.String(), "0123456789") {
-		t.Errorf("String() = %q, want it to start with the first 10 bytes", l.String())
-	}
-	if l.dropped != 6 {
-		t.Errorf("dropped = %d, want 6", l.dropped)
-	}
-	if !strings.Contains(l.String(), "truncated") {
-		t.Errorf("String() = %q, want a truncation note", l.String())
+	if len(msg) > execx.MaxStderr+1024 {
+		t.Errorf("error is %d bytes, want it bounded near execx.MaxStderr (%d)", len(msg), execx.MaxStderr)
 	}
 }
 

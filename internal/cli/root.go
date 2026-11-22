@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "0.4.0-dev"
+var version = "0.5.0-dev"
 
 var configPath string
 
