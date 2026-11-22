@@ -26,6 +26,7 @@ func fakeTools(t *testing.T, failDB string) {
 	dir := t.TempDir()
 	scripts := map[string]string{
 		"pg_dump": `#!/bin/sh
+if [ "$1" = "--version" ]; then echo "pg_dump (PostgreSQL) 18.1"; exit 0; fi
 for a in "$@"; do last="$a"; done
 if [ "$last" = "` + failDB + `" ]; then echo "pg_dump: connection to server failed" >&2; exit 1; fi
 printf 'PGDUMP %s\n' "$*"
@@ -47,13 +48,13 @@ type memStatus struct {
 	data map[string][]byte
 }
 
-func (m *memStatus) PutStatus(_ context.Context, server string, data []byte) error {
+func (m *memStatus) PutServerFile(_ context.Context, server, name string, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.data == nil {
 		m.data = map[string][]byte{}
 	}
-	m.data[server] = data
+	m.data[server+"/"+name] = data
 	return nil
 }
 
@@ -62,7 +63,7 @@ func (m *memStatus) get(t *testing.T, server string) agent.Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var st agent.Status
-	if err := json.Unmarshal(m.data[server], &st); err != nil {
+	if err := json.Unmarshal(m.data[server+"/"+backup.StatusName], &st); err != nil {
 		t.Fatalf("status.json for %s: %v", server, err)
 	}
 	return st

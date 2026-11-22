@@ -153,16 +153,25 @@ func (w *s3Writer) Abort() {
 	w.store.client.RemoveIncompleteUpload(ctx, w.store.bucket, w.key)
 }
 
-// StatusName is the object an agent writes next to its snapshots after
-// every run. It is not a snapshot folder, so List ignores it.
-const StatusName = "status.json"
+// Files an agent writes next to its snapshots. They are not snapshot
+// folders, so List ignores them.
+const (
+	// StatusName is rewritten after every agent run.
+	StatusName = "status.json"
+	// CheckName is written by `bunker agent check` to prove uploads work.
+	CheckName = "check.json"
+)
 
-// PutStatus writes <prefix><server>/status.json.
-func (s *S3Store) PutStatus(ctx context.Context, server string, data []byte) error {
+// PutServerFile writes <prefix><server>/<name>, where name is StatusName or
+// CheckName.
+func (s *S3Store) PutServerFile(ctx context.Context, server, name string, data []byte) error {
 	if err := checkServer(server); err != nil {
 		return err
 	}
-	key := s.prefix + server + "/" + StatusName
+	if name != StatusName && name != CheckName {
+		return fmt.Errorf("refusing to write %q next to snapshots", name)
+	}
+	key := s.prefix + server + "/" + name
 	_, err := s.client.PutObject(ctx, s.bucket, key, strings.NewReader(string(data)), int64(len(data)),
 		minio.PutObjectOptions{ContentType: "application/json"})
 	if err != nil {

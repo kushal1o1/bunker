@@ -55,6 +55,13 @@ func (a *PostgresArtifact) Argv() []string {
 	return append(args, a.DB)
 }
 
+// ProbeArgv is Argv with --schema-only: the same connection and login as a
+// real backup, still read-only, but no data. `bunker agent check` uses it.
+func (a *PostgresArtifact) ProbeArgv() []string {
+	argv := a.Argv()
+	return append([]string{argv[0], argv[1], "--schema-only"}, argv[2:]...)
+}
+
 type FilesArtifact struct {
 	// RemotePath is the absolute path on the server to archive.
 	RemotePath string

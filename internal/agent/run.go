@@ -26,16 +26,17 @@ type Status struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-// StatusWriter stores status.json. *backup.S3Store implements it.
-type StatusWriter interface {
-	PutStatus(ctx context.Context, server string, data []byte) error
+// ServerFiles stores status.json and check.json next to the snapshots.
+// *backup.S3Store implements it.
+type ServerFiles interface {
+	PutServerFile(ctx context.Context, server, name string, data []byte) error
 }
 
 // Runner takes one snapshot of this machine.
 type Runner struct {
 	Cfg     *Config
 	Store   backup.Store
-	Status  StatusWriter
+	Status  ServerFiles
 	Exec    execx.Executor
 	Log     io.Writer
 	Version string
@@ -99,7 +100,7 @@ func (r *Runner) writeStatus(ctx context.Context, st *Status) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	if err := r.Status.PutStatus(ctx, st.Agent, append(data, '\n')); err != nil {
+	if err := r.Status.PutServerFile(ctx, st.Agent, backup.StatusName, append(data, '\n')); err != nil {
 		r.logf("%s: could not write %s: %v", st.Agent, backup.StatusName, err)
 	}
 }
