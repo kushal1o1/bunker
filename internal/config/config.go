@@ -78,13 +78,7 @@ func (c *Config) setDefaults() {
 		c.Storage.Dir = dir
 	}
 	if s3 := c.Storage.S3; s3 != nil {
-		s3.Endpoint = strings.TrimRight(strings.TrimSpace(s3.Endpoint), "/")
-		s3.Bucket = strings.TrimSpace(s3.Bucket)
-		if p := strings.Trim(strings.TrimSpace(s3.Prefix), "/"); p != "" {
-			s3.Prefix = p + "/"
-		} else {
-			s3.Prefix = ""
-		}
+		NormalizeS3(s3)
 	}
 	if c.Retention.Daily == 0 {
 		c.Retention.Daily = DefaultRetentionD
@@ -102,6 +96,9 @@ func (c *Config) setDefaults() {
 
 	for name := range c.Servers {
 		s := c.Servers[name]
+		if s.Agent {
+			continue
+		}
 		if s.SSH.User == "" {
 			s.SSH.User = DefaultSSHUser
 		}
@@ -147,7 +144,7 @@ func (c *Config) Validate() error {
 		return errors.New("concurrency must be >= 1")
 	}
 	if s3 := c.Storage.S3; s3 != nil {
-		if err := validateS3(s3); err != nil {
+		if err := ValidateS3(s3); err != nil {
 			return err
 		}
 	}
@@ -157,6 +154,12 @@ func (c *Config) Validate() error {
 		}
 	}
 	for name, s := range c.Servers {
+		if s.Agent {
+			if err := validateAgentServer(name, s, c.Storage.S3 != nil); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := validateServer(name, s); err != nil {
 			return err
 		}
@@ -164,7 +167,44 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func validateS3(s *model.S3Spec) error {
+// validateAgentServer: an agent server is only a name. Its agent.yaml on the
+// server says what to back up; here a host, ssh or backup would suggest a
+// pull that never happens.
+func validateAgentServer(name string, s model.ServerSpec, hasS3 bool) error {
+	if s.Host != "" || s.SSH != (model.SSHConfig{}) || s.Backup.Postgres != nil || len(s.Backup.Paths) > 0 {
+		return fmt.Errorf("server %q: agent: true takes no host, ssh or backup (the agent's agent.yaml on the server says what to back up)", name)
+	}
+	if !hasS3 {
+		return fmt.Errorf("server %q: agent servers push to S3: set storage.s3 to the same bucket and prefix as its agent.yaml", name)
+	}
+	return nil
+}
+
+// PullServers are the servers this machine backs up over SSH, sorted.
+func (c *Config) PullServers() []string {
+	var names []string
+	for _, n := range c.ServerNames() {
+		if !c.Servers[n].Agent {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// NormalizeS3 trims the endpoint and bucket and turns prefix into "" or
+// "x/". The agent config shares it.
+func NormalizeS3(s3 *model.S3Spec) {
+	s3.Endpoint = strings.TrimRight(strings.TrimSpace(s3.Endpoint), "/")
+	s3.Bucket = strings.TrimSpace(s3.Bucket)
+	if p := strings.Trim(strings.TrimSpace(s3.Prefix), "/"); p != "" {
+		s3.Prefix = p + "/"
+	} else {
+		s3.Prefix = ""
+	}
+}
+
+// ValidateS3 checks a normalized S3 spec. The agent config shares it.
+func ValidateS3(s *model.S3Spec) error {
 	if s.Endpoint == "" {
 		return errors.New("storage.s3.endpoint is required (e.g. https://s3.eu-central-1.amazonaws.com)")
 	}

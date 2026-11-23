@@ -1,0 +1,23 @@
+# /etc/bunker/agent.yaml: what this server backs up, and where it goes.
+# No secrets here: the S3 key is in agent.env.
+
+agent:
+  name: web-01                 # this server's folder in S3; the laptop uses the same name
+
+backup:
+  postgres:
+    - host: /var/run/postgresql   # the host's Postgres, over its socket (peer login, no password)
+      dbs: [shop_db]
+      user: bunker
+  paths:
+    - /var/www/shop/media         # needs: setfacl -R -m u:bunker:rX (and -d for new files)
+
+storage:
+  s3:
+    endpoint: https://s3.eu-central-1.amazonaws.com
+    bucket: my-bunker
+    region: eu-central-1
+    prefix: prod/
+
+encryption:
+  recipient: age1...              # from: bunker keygen --public (on the machine with the private key)

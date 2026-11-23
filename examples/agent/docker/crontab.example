@@ -1,0 +1,4 @@
+# Add to root's crontab (sudo crontab -e), or let
+# `sudo bunker agent install --docker /opt/bunker-agent` write it to /etc/cron.d.
+# Every night at 03:00; flock skips a run while the previous one is still going.
+0 3 * * * cd /opt/bunker-agent && flock -n /run/bunker-agent.lock docker compose run --rm bunker-agent >> /var/log/bunker-agent.log 2>&1

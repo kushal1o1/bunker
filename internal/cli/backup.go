@@ -128,7 +128,7 @@ snapshots. --dry-run prints the plan without connecting.`,
 			return runBackup(cmd, args, runAll, dryRun)
 		},
 	}
-	cmd.Flags().BoolVar(&runAll, "all", false, "backup every configured server")
+	cmd.Flags().BoolVar(&runAll, "all", false, "back up every server except those with agent: true")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan without backing up")
 	return cmd
 }
@@ -144,7 +144,12 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 	case runAll && len(args) > 0:
 		return errors.New("cannot combine --all with specific server names")
 	case runAll:
-		targets = cfg.ServerNames()
+		// Agent servers back themselves up; --all means every server this
+		// machine pulls.
+		targets = cfg.PullServers()
+		if len(targets) == 0 {
+			return errors.New("no servers to pull: every server in bunker.yaml has agent: true")
+		}
 	case len(args) == 0:
 		return errors.New("missing target: supply a server name or --all")
 	default:
@@ -152,8 +157,12 @@ func runBackup(cmd *cobra.Command, args []string, runAll, dryRun bool) error {
 	}
 
 	for _, name := range targets {
-		if _, ok := cfg.Servers[name]; !ok {
+		s, ok := cfg.Servers[name]
+		if !ok {
 			return fmt.Errorf("unknown server %q (try: bunker server list)", name)
+		}
+		if s.Agent {
+			return fmt.Errorf("server %q has agent: true: it backs itself up with bunker agent run on the server (see: bunker status)", name)
 		}
 	}
 
@@ -292,7 +301,8 @@ must exist at its recorded size, match its SHA-256, and fully decrypt and
 decompress with your age identity. Exits 0 only when every check passes.
 NO KEY means the snapshot was encrypted to a different key, not corruption.
 Reads local storage, or S3 when it is the only store. With both, --remote
-checks the S3 copy; it is streamed, never saved to disk.`,
+checks the S3 copy; it is streamed, never saved to disk. Servers with
+agent: true are always read from S3.`,
 		Example: `  # find a snapshot, then verify it
   bunker backup list my-vps
   bunker backup verify my-vps 2026-10-17T09-12-03
@@ -320,15 +330,15 @@ func runVerify(cmd *cobra.Command, args []string, remote bool) error {
 	if err != nil {
 		return err
 	}
+	server, snapshot := args[0], args[1]
 	store := stores.Primary()
-	if remote {
+	// An agent's snapshots only ever exist in S3.
+	if remote || cfg.Servers[server].Agent {
 		if stores.Remote == nil {
 			return errors.New("--remote needs storage.s3 in bunker.yaml")
 		}
 		store = stores.Remote
 	}
-
-	server, snapshot := args[0], args[1]
 	verifier := &backup.Verifier{
 		Cfg:   cfg,
 		Store: store,

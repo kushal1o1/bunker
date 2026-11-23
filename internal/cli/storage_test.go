@@ -22,11 +22,31 @@ import (
 // memStore is an in-memory backup.Store standing in for S3, so the CLI's
 // local+S3 logic is tested without a bucket.
 type memStore struct {
-	mu    sync.Mutex
-	files map[string][]byte // server/snapshot/file
+	mu          sync.Mutex
+	files       map[string][]byte // server/snapshot/file
+	serverFiles map[string][]byte // server/status.json
 }
 
-func newMemStore() *memStore { return &memStore{files: map[string][]byte{}} }
+func newMemStore() *memStore {
+	return &memStore{files: map[string][]byte{}, serverFiles: map[string][]byte{}}
+}
+
+func (m *memStore) PutServerFile(_ context.Context, server, name string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.serverFiles[server+"/"+name] = data
+	return nil
+}
+
+func (m *memStore) GetServerFile(_ context.Context, server, name string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	data, ok := m.serverFiles[server+"/"+name]
+	if !ok {
+		return nil, fs.ErrNotExist
+	}
+	return data, nil
+}
 
 func (m *memStore) Name() string  { return "s3" }
 func (m *memStore) Where() string { return "s3://mem/" }
@@ -216,8 +236,9 @@ func TestRetentionDeletesFromBothStores(t *testing.T) {
 	if got := remoteIDs(t, remote); !reflect.DeepEqual(got, []string{"2026-10-17T18-00-00"}) {
 		t.Errorf("remote after retention = %v", got)
 	}
-	if got := snapshotIDs(t, storage); !reflect.DeepEqual(got, []string{"2026-10-17T18-00-00", "2026-10-01T09-00-00"}) {
-		t.Errorf("local after retention = %v (the no-manifest folder must stay)", got)
+	// The old folder without a manifest is an abandoned run and goes too.
+	if got := snapshotIDs(t, storage); !reflect.DeepEqual(got, []string{"2026-10-17T18-00-00"}) {
+		t.Errorf("local after retention = %v", got)
 	}
 }
 

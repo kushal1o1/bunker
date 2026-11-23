@@ -39,6 +39,7 @@ nav:
   - Getting Started: getting-started.md
   - Configuration: configuration.md
   - Retention: retention.md
+  - Agent mode: agent.md
   - Commands: COMMANDS.md
   - Roadmap: roadmap.md
 

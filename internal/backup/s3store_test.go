@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -323,4 +324,48 @@ func totalOf(arts []backup.ArtifactEntry) int64 {
 		n += a.Size
 	}
 	return n
+}
+
+// status.json and check.json sit next to the snapshot folders: list,
+// verify and delete must not mistake them for snapshots, and only those two
+// names may be written there.
+func TestS3ServerFiles(t *testing.T) {
+	f := startFakeS3(t)
+	cfg := s3Config(t, stdResponder, f, false)
+	ctx := context.Background()
+	st := f.store(t, cfg)
+
+	if _, err := st.GetServerFile(ctx, "vps-01", backup.StatusName); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing status: err = %v, want fs.ErrNotExist", err)
+	}
+	res, err := f.runner(t, cfg).Run(ctx, "vps-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{backup.StatusName, backup.CheckName} {
+		if err := st.PutServerFile(ctx, "vps-01", name, []byte(`{"ok":true}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.PutServerFile(ctx, "vps-01", "evil.json", []byte("x")); err == nil {
+		t.Error("PutServerFile accepted a name other than status.json / check.json")
+	}
+	if err := st.PutServerFile(ctx, "../x", backup.StatusName, []byte("x")); err == nil {
+		t.Error("PutServerFile accepted a server name with a path")
+	}
+
+	got, err := st.GetServerFile(ctx, "vps-01", backup.StatusName)
+	if err != nil || string(got) != `{"ok":true}` {
+		t.Fatalf("GetServerFile = %q, %v", got, err)
+	}
+	snaps, err := st.List(ctx, "vps-01")
+	if err != nil || len(snaps) != 1 || snaps[0].ID != res.Snapshot {
+		t.Fatalf("List = %+v, %v; want only the snapshot", snaps, err)
+	}
+	if err := st.Delete(ctx, "vps-01", res.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.GetServerFile(ctx, "vps-01", backup.StatusName); err != nil {
+		t.Errorf("deleting a snapshot removed status.json: %v", err)
+	}
 }

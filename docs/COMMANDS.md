@@ -44,6 +44,11 @@ hints off with `--no-hints` or by setting `BUNKER_NO_HINTS=1`.
 | [`bunker backup verify <server> <snapshot>`](#backup-verify) | verify a snapshot's checksums, archive integrity and decryption |
 | [`bunker retention apply [server...]`](#retention-apply) | preview, or with `--yes` delete, snapshots the retention policy drops |
 | [`bunker storage sync [server...]`](#storage-sync) | upload local snapshots that are missing from S3 |
+| [`bunker status [server...]`](#status) | each server's latest snapshot and its agent's last run |
+| [`bunker agent run`](#agent-run) | on a server: back it up and push to S3 (agent mode, in development) |
+| [`bunker agent check`](#agent-check) | on a server: confirm the agent can reach every database, path and S3 |
+| [`bunker agent install`](#agent-install) | on a server: schedule the agent with a systemd timer or cron |
+| [`bunker agent uninstall`](#agent-uninstall) | on a server: remove that schedule |
 | `bunker completion <shell>` | generate a shell completion script |
 | `bunker help [command]` | help for any command |
 
@@ -140,6 +145,8 @@ Notes:
 
 - `DB` lists `backup.postgres.dbs`, `PATHS` lists `backup.paths`; `-` means
   none.
+- Servers with `agent: true` show `agent` as their host: what they back up is
+  in `agent.yaml` on the server.
 - Reads the config only and connects to nothing, so it is the first thing to
   run when a config is wrong.
 
@@ -372,7 +379,12 @@ Preview only: 1 snapshot(s), 42.0 MB would be deleted. Nothing was removed.
 Notes:
 
 - The newest snapshot is always kept.
-- Folders without a valid manifest are shown as `skip` and never deleted.
+- A snapshot without `manifest.json` that is more than a day old is a run that
+  never finished (a crash, or an agent that cannot delete its own leftovers)
+  and is deleted with `--yes`. A younger one may still be running and is
+  shown as `skip`.
+- A snapshot whose manifest is corrupt is shown as `skip` and never deleted,
+  so you can look at it first.
 - With both local and S3 storage, each snapshot is decided once and deleted
   from both. A snapshot that exists in only one place still counts.
 - See [Retention](retention.md) for exactly how the policy decides.
@@ -413,3 +425,205 @@ Notes:
   once it is whole. A failed copy is removed from S3.
 - Snapshots without a valid local manifest are skipped.
 - Exit code `1` if any upload failed.
+
+---
+
+## status
+
+One row per server: its newest complete snapshot, and for servers with
+`agent: true` the result of the agent's last run, read from S3. Nothing on the
+servers is contacted.
+
+```bash
+# every server
+bunker status
+
+# some servers
+bunker status web-01 db-02
+```
+
+No flags.
+
+```
+SERVER  MODE   LAST SNAPSHOT        AGE   SIZE      LAST RUN
+db-02   pull   2026-11-22T09-12-03  20m   42.0 MB   -
+web-01  agent  2026-11-22T03-00-00  6h    161.6 MB  ok 6h ago
+web-02  agent  2026-11-21T03-00-00  1d6h  80.0 MB   FAILED 6h ago: pg_dump exit 1: password authentication failed for user "bunker"
+
+Error: 1 server(s) need attention
+```
+
+Notes:
+
+- Exit code `1` when a server needs attention: an agent's last run failed, or
+  a server has no complete snapshot. Run it from cron to get told.
+- `no report yet` means the agent has not finished a run.
+- Pull servers show `-` under `LAST RUN`: the snapshot age says it all.
+
+---
+
+## agent run
+
+Runs on the server itself: back up the databases and paths in `agent.yaml`,
+encrypt with the public key and upload the snapshot to S3. It runs once and
+exits: schedule it with a systemd timer or cron on the server. Agent mode is
+in development; see [Agent mode](agent.md) to set it up.
+
+```bash
+# one backup now (config: /etc/bunker/agent.yaml)
+bunker agent run
+
+# another config file
+bunker agent run -c ./agent.yaml
+```
+
+No flags.
+
+```
+2026-11-22T03:00:00Z web-01: backup started
+2026-11-22T03:00:00Z web-01: [1/2] postgres/shop-postgres/app
+2026-11-22T03:00:04Z web-01: [1/2] postgres/shop-postgres/app done, 41.2 MB in 3.9s
+2026-11-22T03:00:04Z web-01: [2/2] files/data/shop/uploads
+2026-11-22T03:00:09Z web-01: [2/2] files/data/shop/uploads done, 120.4 MB in 5.1s
+2026-11-22T03:00:09Z web-01: snapshot 2026-11-22T03-00-00 complete: 2 artifact(s), 161.6 MB in 9.2s
+```
+
+Notes:
+
+- The agent needs `encryption.recipient` and `storage.s3`. It refuses a
+  private key and local storage.
+- After every run it writes `<name>/status.json` to S3 with the result.
+- Verify, retention and restore run on your laptop, never on the agent.
+- Exit code `1` if the backup failed.
+
+---
+
+## agent check
+
+Confirms a server is ready for the agent, without taking a backup. Run it as
+the same user, or in the same container, as the agent.
+
+```bash
+# before the first run
+bunker agent check
+
+# inside the agent container
+docker compose run --rm bunker-agent agent check
+```
+
+No flags.
+
+```
+Checking /etc/bunker/agent.yaml (agent web-01)
+
+  OK    config    valid; encrypts to age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p
+  OK    user      bunker (uid 997)
+  OK    pg_dump   pg_dump (PostgreSQL) 18.1
+  OK    postgres  shop-postgres/app
+  FAIL  postgres  blog-db/app: pg_dump exit 1: password authentication failed for user "bunker"
+  WARN  pgpass    /run/secrets/pgpass is readable by others (0644): pg_dump ignores it; chmod 600 /run/secrets/pgpass
+  OK    path      /data/shop/uploads (1203 file(s))
+  OK    s3        uploaded s3://my-bunker/prod/web-01/check.json
+
+Error: 1 check(s) failed
+```
+
+| Check | What it does |
+|---|---|
+| config | `agent.yaml` is valid; shows the public key backups are encrypted to |
+| user | warns when running as root |
+| pg_dump | found on `PATH`, with its version |
+| postgres | logs in to each database with `pg_dump --schema-only`: same login as a backup, no data read |
+| pgpass | when `PGPASSFILE` or `~/.pgpass` is used: warns if others can read it, since `pg_dump` then ignores it |
+| path | every file under the path can be read |
+| s3 | uploads `<name>/check.json`, proving the upload key works |
+
+Notes:
+
+- Exit code `1` if any check fails. Warnings do not fail.
+- `check.json` is overwritten by the next check. The agent's upload-only key
+  cannot delete it, and bunker ignores it everywhere else.
+
+---
+
+## agent install
+
+Schedules the agent, and does nothing else: it writes a systemd service and
+timer (host agent) or a cron file (container agent). Users, permissions,
+`agent.yaml` and `agent.env` are yours to set up first; see
+[Agent mode](agent.md).
+
+```bash
+# host agent, every day at 03:00
+sudo bunker agent install
+
+# another time, and see the files first
+sudo bunker agent install --at 01:30 --dry-run
+
+# container agent in /opt/bunker-agent
+sudo bunker agent install --docker /opt/bunker-agent
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--at` | `03:00` | daily time, server local time |
+| `--user` | `bunker` | user the backup runs as (host agent); must exist |
+| `--docker` | | schedule the container agent in this folder with cron |
+| `--dry-run` | `false` | print the files and commands, change nothing |
+| `--force` | `false` | replace an existing service, timer or cron file |
+
+```
+Config /etc/bunker/agent.yaml: ok (agent web-01)
+wrote /etc/systemd/system/bunker-agent.service
+wrote /etc/systemd/system/bunker-agent.timer
+ran systemctl daemon-reload
+ran systemctl enable --now bunker-agent.timer
+
+NEXT                        LEFT     LAST  PASSED  UNIT                ACTIVATES
+Tue 2026-11-24 03:04:12 UTC 9h left  -     -       bunker-agent.timer  bunker-agent.service
+
+Run one now to test: sudo systemctl start bunker-agent && journalctl -u bunker-agent
+```
+
+| Mode | Writes | Runs |
+|---|---|---|
+| host | `/etc/systemd/system/bunker-agent.service` and `.timer` | `systemctl daemon-reload`, `systemctl enable --now bunker-agent.timer` |
+| `--docker <dir>` | `/etc/cron.d/bunker-agent` | nothing |
+
+Notes:
+
+- `agent.yaml` is checked first (`-c`, or `/etc/bunker/agent.yaml`; with
+  `--docker`, `<dir>/agent.yaml`). A broken config writes nothing.
+- The service runs this bunker binary with that config and reads `agent.env`
+  from the same folder.
+- The timer adds up to 10 minutes of random delay, so servers do not all
+  upload at once, and catches up on a run missed while the server was off.
+- The files are plain systemd and cron files. Edit them for any other
+  schedule.
+- Needs root, except with `--dry-run`. Hosts without systemd: use cron (see
+  [Agent mode](agent.md)).
+
+---
+
+## agent uninstall
+
+Undoes `agent install`: disables the timer and removes
+`bunker-agent.service`, `bunker-agent.timer` and `/etc/cron.d/bunker-agent`,
+whichever exist.
+
+```bash
+sudo bunker agent uninstall
+
+# see what it would remove
+bunker agent uninstall --dry-run
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dry-run` | `false` | print what would be removed, change nothing |
+
+Notes:
+
+- `agent.yaml`, `agent.env` and the snapshots in S3 are not touched.
+- Running it again when nothing is installed is fine.
+- Needs root, except with `--dry-run`.

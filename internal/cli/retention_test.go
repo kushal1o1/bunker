@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/kushal1o1/bunker/internal/backup"
 )
@@ -84,9 +85,34 @@ func TestRetentionApplyYesDeletesOnlyPruned(t *testing.T) {
 	if err := ExecuteContext(context.Background(), []string{"-c", cfgPath, "retention", "apply", "--yes"}); err != nil {
 		t.Fatal(err)
 	}
-	// Kept: the newest snapshot (daily 1, weekly 1, monthly 1). The folder
-	// without a manifest is skipped, never deleted.
-	want := []string{"2026-10-17T18-00-00", "2026-10-01T09-00-00"}
+	// Kept: the newest snapshot (daily 1, weekly 1, monthly 1). The old
+	// folder without a manifest is an abandoned run and is deleted too.
+	want := []string{"2026-10-17T18-00-00"}
+	if got := snapshotIDs(t, storage); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after --yes = %v, want %v", got, want)
+	}
+}
+
+// A folder without a manifest from the last day may still be uploading, and
+// a corrupt manifest needs a human: retention leaves both alone.
+func TestRetentionKeepsRecentIncompleteAndBadManifest(t *testing.T) {
+	cfgPath, storage := setupRetention(t)
+	recent := backup.NewSnapshotID(time.Now().Add(-time.Hour))
+	if err := os.MkdirAll(backup.SnapshotDir(storage, "web", recent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bad := backup.SnapshotDir(storage, "web", "2026-10-02T09-00-00")
+	if err := os.MkdirAll(bad, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backup.ManifestPath(bad), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ExecuteContext(context.Background(), []string{"-c", cfgPath, "retention", "apply", "--yes"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{recent, "2026-10-17T18-00-00", "2026-10-02T09-00-00"}
 	if got := snapshotIDs(t, storage); !reflect.DeepEqual(got, want) {
 		t.Fatalf("after --yes = %v, want %v", got, want)
 	}

@@ -1,22 +1,22 @@
 package backup
 
 import (
-	"fmt"
 	"path"
 	"strconv"
 	"strings"
 )
 
 // Artifact is one unit of backup data from a server. Every kind produces an
-// encrypted, compressed archive file from bytes streamed over SSH. New kinds
-// (MySQL, Mongo, arbitrary commands, ...) plug in by implementing this
-// interface; the pipeline does not change.
+// encrypted, compressed archive file from the stdout of one command. New
+// kinds (MySQL, Mongo, ...) plug in by implementing this interface; the
+// pipeline does not change.
 type Artifact interface {
 	ID() string
 	// FilePath is the archive's path relative to the snapshot directory.
 	FilePath() string
-	// Command is the remote, read-only command whose stdout we stream.
-	Command() string
+	// Argv is the read-only command whose stdout we stream. It is run without
+	// a shell locally, and quoted with execx.ShellJoin over SSH.
+	Argv() []string
 }
 
 type PostgresArtifact struct {
@@ -24,18 +24,27 @@ type PostgresArtifact struct {
 	// Optional pg_dump connection overrides passed as -h/-p/-U.
 	User, Host string
 	Port       int
+	// Group, when set, is a folder between "postgres/" and the database, so
+	// several Postgres servers can each have a database with the same name.
+	// The agent sets it; pull mode leaves it empty.
+	Group string
 }
 
-func (a *PostgresArtifact) ID() string {
+func (a *PostgresArtifact) name() string {
+	if a.Group != "" {
+		return "postgres/" + a.Group + "/" + a.DB
+	}
 	return "postgres/" + a.DB
 }
 
-func (a *PostgresArtifact) FilePath() string {
-	return "postgres/" + a.DB + ".dump.zst.age"
-}
+func (a *PostgresArtifact) ID() string { return a.name() }
 
-func (a *PostgresArtifact) Command() string {
-	args := []string{"pg_dump", "-Fc"}
+func (a *PostgresArtifact) FilePath() string { return a.name() + ".dump.zst.age" }
+
+func (a *PostgresArtifact) Argv() []string {
+	// -w: never prompt for a password. A missing password must fail the
+	// run, not leave pg_dump waiting on a terminal nobody is watching.
+	args := []string{"pg_dump", "-Fc", "-w"}
 	if a.Host != "" {
 		args = append(args, "-h", a.Host)
 	}
@@ -45,8 +54,14 @@ func (a *PostgresArtifact) Command() string {
 	if a.User != "" {
 		args = append(args, "-U", a.User)
 	}
-	args = append(args, a.DB)
-	return strings.Join(quoteEach(args), " ")
+	return append(args, a.DB)
+}
+
+// ProbeArgv is Argv with --schema-only: the same connection and login as a
+// real backup, still read-only, but no data. `bunker agent check` uses it.
+func (a *PostgresArtifact) ProbeArgv() []string {
+	argv := a.Argv()
+	return append([]string{argv[0], argv[1], "--schema-only"}, argv[2:]...)
 }
 
 type FilesArtifact struct {
@@ -63,19 +78,7 @@ func (a *FilesArtifact) FilePath() string {
 	return "files/" + safe + ".tar.zst.age"
 }
 
-func (a *FilesArtifact) Command() string {
+func (a *FilesArtifact) Argv() []string {
 	parent, base := path.Dir(a.RemotePath), path.Base(a.RemotePath)
-	return fmt.Sprintf("tar -C %s -cf - %s", quote(parent), quote(base))
-}
-
-func quote(s string) string {
-	return strconv.Quote(s)
-}
-
-func quoteEach(s []string) []string {
-	out := make([]string, len(s))
-	for i, v := range s {
-		out[i] = quote(v)
-	}
-	return out
+	return []string{"tar", "-C", parent, "-cf", "-", base}
 }

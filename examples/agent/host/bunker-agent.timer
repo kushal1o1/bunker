@@ -1,0 +1,14 @@
+# /etc/systemd/system/bunker-agent.timer
+# When the backup runs. Change OnCalendar, then: systemctl daemon-reload
+[Unit]
+Description=Run the bunker agent every night
+
+[Timer]
+OnCalendar=*-*-* 03:00
+# Run a missed backup after a reboot.
+Persistent=true
+# Spread servers out so they do not all upload at once.
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

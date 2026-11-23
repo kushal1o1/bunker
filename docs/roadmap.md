@@ -10,12 +10,15 @@
 - Many servers in parallel, progress table, summary
 - Connect timeout, keepalive, clean `Ctrl-C`
 - Back up with the public key only (`encryption.recipient`)
+- `bunker status`: each server's newest snapshot and its agent's last run
 
 ## Next
 
-1. Docker: Postgres and paths inside containers, then named volumes
+1. [Agent mode](agent.md), in development: `bunker agent run` on the server,
+   pushing straight to S3. Covers Docker (databases and volumes) without root
 2. `backup restore` to a local folder
-3. `server check`, `status`, `--json`, failure notifications
+3. `server check`, `--json`, failure notifications
+4. Resumable uploads: skip artifacts already in S3
 
 ## Agent mode
 

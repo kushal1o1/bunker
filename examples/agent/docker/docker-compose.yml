@@ -1,0 +1,35 @@
+# /opt/bunker-agent/docker-compose.yml
+# The agent runs once per `docker compose run` (see crontab.example). It has
+# no Docker socket, no capabilities and a read-only filesystem. It reads only
+# what is mounted here, and reaches only the databases on bunker-net.
+
+services:
+  bunker-agent:
+    image: ghcr.io/kushal1o1/bunker:v0.5.0-dev
+    command: agent run
+    env_file: agent.env                # read by compose on the host, not by the container
+    environment:
+      PGPASSFILE: /run/secrets/pgpass
+    secrets: [pgpass]
+    networks: [bunker-net]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Join the group that owns the volume files (33 = www-data on Debian
+    # images), so files like mode 640 can be read. No capability needed.
+    group_add: ["33"]
+    volumes:
+      - ./agent.yaml:/etc/bunker/agent.yaml:ro
+      - shop_uploads:/data/shop/uploads:ro
+
+secrets:
+  pgpass:
+    file: ./pgpass                     # chown 10001 pgpass && chmod 600 pgpass
+
+volumes:
+  shop_uploads:
+    external: true                     # the app's volume: docker volume ls
+
+networks:
+  bunker-net:
+    external: true                     # docker network create bunker-net

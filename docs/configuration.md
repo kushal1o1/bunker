@@ -91,6 +91,19 @@ It is also the folder name under `storage.dir`.
 Each server needs at least one entry in `backup.postgres.dbs` or in
 `backup.paths`. It can have both.
 
+A server that backs itself up with `bunker agent run` is only a name:
+
+```yaml
+servers:
+  web-01:
+    agent: true
+```
+
+It takes no `host`, `ssh` or `backup`: its `agent.yaml` on the server says what
+to back up. `backup run` skips it (`--all` too), while `backup list`,
+`backup verify`, `retention apply` and `status` read its snapshots from S3, so
+`storage.s3` must point at the same bucket and prefix as its `agent.yaml`.
+
 When `postgres.user`, `host` and `port` are left out, `pg_dump` connects
 through the local Unix socket as the SSH user (peer auth). Set them when the
 database role differs from the SSH user or listens only on TCP; the password
@@ -371,4 +384,6 @@ bunker refuses to start when:
 - `storage.s3` has no `endpoint` or `bucket`, or the endpoint has no
   `https://` / `http://` or contains a path
 - `encryption.recipient` is not an age public key (`age1...`)
+- a server with `agent: true` also has `host`, `ssh` or `backup`, or
+  `storage.s3` is not set
 - the file contains a key bunker does not know

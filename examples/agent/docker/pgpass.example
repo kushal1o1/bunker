@@ -1,0 +1,5 @@
+# /opt/bunker-agent/pgpass: host:port:database:user:password, one line per database server.
+# chown 10001 pgpass && chmod 600 pgpass  (the agent runs as uid 10001 and must read it;
+# pg_dump ignores a pgpass others can read). Remove these comment lines or keep them: pg_dump skips #.
+shop-postgres:5432:*:bunker:change-me
+blog-db:5432:*:bunker:change-me-too

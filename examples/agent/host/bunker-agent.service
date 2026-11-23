@@ -1,0 +1,17 @@
+# /etc/systemd/system/bunker-agent.service
+# One backup per start. bunker-agent.timer starts it.
+[Unit]
+Description=bunker agent: back up this server to S3
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=bunker
+Group=bunker
+ExecStart=/usr/local/bin/bunker agent run
+EnvironmentFile=/etc/bunker/agent.env
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/kushal1o1/bunker/internal/backup"
 	"github.com/kushal1o1/bunker/internal/retention"
@@ -30,9 +31,12 @@ func newRetentionApplyCmd() *cobra.Command {
 		Short: "show which snapshots the policy keeps; delete the rest with --yes",
 		Long: `Apply the retention policy (daily / weekly / monthly in bunker.yaml) to
 stored snapshots. Without --yes it only prints KEEP / DELETE per snapshot and
-removes nothing. The newest snapshot is always kept, and snapshots without a
-valid manifest are skipped, never deleted. With both local and S3 storage, a
-snapshot is deleted from both.`,
+removes nothing. The newest snapshot is always kept. A snapshot with no
+manifest.json that is more than a day old is a run that never finished (a
+crash, or an agent that cannot delete its own leftovers) and is deleted too;
+a younger one may still be running and is skipped. A snapshot whose manifest
+is corrupt is never deleted, so a human looks at it first. With both local
+and S3 storage, a snapshot is deleted from both.`,
 		Example: `  # preview every server
   bunker retention apply
 
@@ -56,9 +60,26 @@ type retentionRow struct {
 	why    string
 }
 
+// abandonedAfter is how old a snapshot without a manifest must be before
+// retention treats it as a run that never finished. No run takes a day; a
+// younger one may still be uploading.
+const abandonedAfter = 24 * time.Hour
+
+// abandoned reports whether a snapshot is leftover from a run that never
+// finished: no copy has a manifest at all, and it is older than
+// abandonedAfter. A corrupt manifest is not abandoned: it needs a human.
+func abandoned(s snapRow, now time.Time) bool {
+	for _, c := range []*backup.SnapshotInfo{s.local, s.remote} {
+		if c != nil && c.Status != backup.NoManifest {
+			return false
+		}
+	}
+	return now.Sub(s.created) > abandonedAfter
+}
+
 // runRetention previews by default. Only complete snapshots take part in the
-// policy; folders without a valid manifest are shown as skip and never
-// deleted, so a human looks at them first.
+// policy. Snapshots without a manifest are deleted once abandoned; younger
+// ones and those with a corrupt manifest are shown as skip.
 func runRetention(cmd *cobra.Command, args []string, yes bool) error {
 	cfg, err := loadConfig()
 	if err != nil {
@@ -97,37 +118,52 @@ func runRetention(cmd *cobra.Command, args []string, yes bool) error {
 
 		// A snapshot takes part when at least one copy is complete; one
 		// with no complete copy anywhere is left for a human to look at.
-		byID := map[string]snapRow{}
-		var items []retention.Item
+		var keep, del int
 		var rows []retentionRow
-		for _, s := range snaps {
-			if !s.complete() {
-				rows = append(rows, retentionRow{id: s.id, size: "-", action: "skip", why: s.best().Status.String()})
-				continue
+		// remove marks row for deletion, and deletes s with --yes.
+		remove := func(row *retentionRow, s snapRow) {
+			del++
+			toDelete++
+			freed += s.size()
+			row.action = "delete"
+			if !yes {
+				return
 			}
-			byID[s.id] = s
-			items = append(items, retention.Item{ID: s.id, Time: s.created})
+			if err := deleteEverywhere(ctx, stores, name, s); err != nil {
+				failed++
+				row.action, row.why = "FAILED", err.Error()
+			} else {
+				row.action = "deleted"
+			}
 		}
 
-		var keep, del int
+		byID := map[string]snapRow{}
+		var items []retention.Item
+		now := time.Now()
+		for _, s := range snaps {
+			if s.complete() {
+				byID[s.id] = s
+				items = append(items, retention.Item{ID: s.id, Time: s.created})
+				continue
+			}
+			row := retentionRow{id: s.id, size: "-", action: "skip", why: s.best().Status.String()}
+			switch {
+			case abandoned(s, now):
+				row.why = "no manifest, older than a day: a run that never finished"
+				remove(&row, s)
+			case s.best().Status == backup.NoManifest:
+				row.why = "no manifest yet: may still be running"
+			}
+			rows = append(rows, row)
+		}
+
 		for _, d := range retention.Apply(policy, items) {
 			s := byID[d.ID]
 			row := retentionRow{id: d.ID, size: backup.HumanBytes(s.size()), action: "keep", why: strings.Join(d.Reasons, ", ")}
-			if !d.Keep {
-				del++
-				toDelete++
-				freed += s.size()
-				row.action = "delete"
-				if yes {
-					if err := deleteEverywhere(ctx, stores, name, s); err != nil {
-						failed++
-						row.action, row.why = "FAILED", err.Error()
-					} else {
-						row.action = "deleted"
-					}
-				}
-			} else {
+			if d.Keep {
 				keep++
+			} else {
+				remove(&row, s)
 			}
 			rows = append(rows, row)
 		}
