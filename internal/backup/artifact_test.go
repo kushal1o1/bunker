@@ -13,9 +13,9 @@ func TestArtifactCommandsOverSSH(t *testing.T) {
 		art  Artifact
 		want string
 	}{
-		{&PostgresArtifact{DB: "shop_db"}, "pg_dump -Fc shop_db"},
+		{&PostgresArtifact{DB: "shop_db"}, "pg_dump -Fc -w shop_db"},
 		{&PostgresArtifact{DB: "shop_db", Host: "127.0.0.1", Port: 5433, User: "bunker"},
-			"pg_dump -Fc -h 127.0.0.1 -p 5433 -U bunker shop_db"},
+			"pg_dump -Fc -w -h 127.0.0.1 -p 5433 -U bunker shop_db"},
 		{&FilesArtifact{RemotePath: "/var/www/shop/uploads"}, "tar -C /var/www/shop -cf - uploads"},
 		{&FilesArtifact{RemotePath: "/srv/my files/$HOME"}, "tar -C '/srv/my files' -cf - '$HOME'"},
 		{&FilesArtifact{RemotePath: "/data"}, "tar -C / -cf - data"},

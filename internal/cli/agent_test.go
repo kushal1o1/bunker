@@ -43,3 +43,14 @@ func TestAgentCheckFailsWhenS3CannotOpen(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentInstallRejectsUserWithDocker(t *testing.T) {
+	cmd := newRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"agent", "install", "--dry-run", "--docker", t.TempDir(), "--user", "bunker"})
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--user is for the host agent") {
+		t.Fatalf("err = %v, want --user refused with --docker", err)
+	}
+}

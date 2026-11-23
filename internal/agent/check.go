@@ -154,6 +154,14 @@ func checkPgpass() (CheckResult, bool) {
 	case info.Mode().Perm()&0o077 != 0:
 		return CheckResult{Warn, "pgpass", fmt.Sprintf("%s is readable by others (%#o): pg_dump ignores it; chmod 600 %s", p, info.Mode().Perm(), p)}, true
 	}
+	// The mode can be right while the owner is wrong (a file mounted into a
+	// container keeps its host owner): then pg_dump cannot read it at all.
+	f, err := os.Open(p)
+	if err != nil {
+		uid := os.Geteuid()
+		return CheckResult{Fail, "pgpass", fmt.Sprintf("%s cannot be read by uid %d: %s (make it owned by uid %d; for a file mounted into a container, chown %d the file on the host)", p, uid, oneLine(err.Error()), uid, uid)}, true
+	}
+	f.Close()
 	return CheckResult{OK, "pgpass", p}, true
 }
 

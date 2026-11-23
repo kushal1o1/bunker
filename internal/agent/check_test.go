@@ -158,3 +158,26 @@ func TestCheckPgpassMode(t *testing.T) {
 		t.Errorf("missing PGPASSFILE = %+v, want FAIL", got["pgpass"])
 	}
 }
+
+func TestCheckPgpassWrongOwner(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+	fakeTools(t, "")
+	cfg, _ := setup(t)
+	cfg.Backup.Paths = nil
+	pgpass := filepath.Join(t.TempDir(), "pgpass")
+	if err := os.WriteFile(pgpass, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Right mode, but this user cannot read it: what a file owned by another
+	// uid looks like.
+	if err := os.Chmod(pgpass, 0o200); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PGPASSFILE", pgpass)
+	got := runCheck(t, cfg, &memStatus{})
+	if levels(got["pgpass"]) != "FAIL" || !strings.Contains(got["pgpass"][0].Detail, "chown") {
+		t.Errorf("unreadable pgpass = %+v, want FAIL with the chown fix", got["pgpass"])
+	}
+}

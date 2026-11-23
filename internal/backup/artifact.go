@@ -42,7 +42,9 @@ func (a *PostgresArtifact) ID() string { return a.name() }
 func (a *PostgresArtifact) FilePath() string { return a.name() + ".dump.zst.age" }
 
 func (a *PostgresArtifact) Argv() []string {
-	args := []string{"pg_dump", "-Fc"}
+	// -w: never prompt for a password. A missing password must fail the
+	// run, not leave pg_dump waiting on a terminal nobody is watching.
+	args := []string{"pg_dump", "-Fc", "-w"}
 	if a.Host != "" {
 		args = append(args, "-h", a.Host)
 	}

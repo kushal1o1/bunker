@@ -164,8 +164,8 @@ func TestRunOnceRunsExpectedCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"pg_dump", "-Fc", "-h", "shop-postgres", "-U", "bunker", "app"},
-		{"pg_dump", "-Fc", "-h", "blog-db", "-p", "5433", "-U", "bunker", "app"},
+		{"pg_dump", "-Fc", "-w", "-h", "shop-postgres", "-U", "bunker", "app"},
+		{"pg_dump", "-Fc", "-w", "-h", "blog-db", "-p", "5433", "-U", "bunker", "app"},
 		{"tar", "-C", "/srv/my files", "-cf", "-", "$HOME"},
 	}
 	if len(ex.calls) != len(want) {

@@ -2,7 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/kushal1o1/bunker/internal/agent"
@@ -33,7 +36,7 @@ func newAgentCmd() *cobra.Command {
 		Use:   "agent",
 		Short: "back up this machine and push to s3",
 	}
-	cmd.AddCommand(newAgentRunCmd(), newAgentCheckCmd())
+	cmd.AddCommand(newAgentRunCmd(), newAgentCheckCmd(), newAgentInstallCmd(), newAgentUninstallCmd())
 	return cmd
 }
 
@@ -148,3 +151,95 @@ any check fails; warnings do not fail.`,
 type failedFiles struct{ err error }
 
 func (f failedFiles) PutServerFile(context.Context, string, string, []byte) error { return f.err }
+
+func newAgentInstallCmd() *cobra.Command {
+	var at, runAs, dockerDir string
+	var dryRun, force bool
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "schedule the agent with a systemd timer or cron",
+		Long: `Set up only the schedule for the agent, nothing else.
+
+Host agent: write bunker-agent.service and bunker-agent.timer to
+/etc/systemd/system (running this binary with agent.yaml as --user, reading
+agent.env next to agent.yaml), then enable the timer.
+
+Container agent (--docker <dir>): write /etc/cron.d/bunker-agent, which runs
+docker compose run --rm bunker-agent in <dir>.
+
+Both run daily at --at. agent.yaml is checked first. It does not create users,
+set permissions or write agent.yaml or agent.env: see the Agent mode docs.
+The files are plain systemd and cron files: edit them for any other schedule.
+Existing files are never replaced without --force. Needs root, except with
+--dry-run.`,
+		Example: `  # host agent, every day at 03:00
+  sudo bunker agent install
+
+  # another time, and see the files first
+  sudo bunker agent install --at 01:30 --dry-run
+
+  # container agent in /opt/bunker-agent
+  sudo bunker agent install --docker /opt/bunker-agent`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !dryRun && os.Geteuid() != 0 {
+				return errors.New("agent install writes to /etc: run it with sudo (or use --dry-run)")
+			}
+			in := &agent.Installer{Out: cmd.OutOrStdout(), DryRun: dryRun, Force: force}
+			if dockerDir != "" {
+				if cmd.Flags().Changed("user") {
+					return errors.New("--user is for the host agent; the container agent runs as uid 10001 (set user: in docker-compose.yml)")
+				}
+				dir, err := filepath.Abs(dockerDir)
+				if err != nil {
+					return err
+				}
+				return in.InstallCron(dir, at)
+			}
+			cfgPath, err := filepath.Abs(agentConfigPath(cmd))
+			if err != nil {
+				return err
+			}
+			bin, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			if real, err := filepath.EvalSymlinks(bin); err == nil {
+				bin = real
+			}
+			return in.InstallSystemd(agent.SystemdOptions{Config: cfgPath, Binary: bin, User: runAs, At: at})
+		},
+	}
+	cmd.Flags().StringVar(&at, "at", "03:00", "daily time to run, HH:MM (server local time)")
+	cmd.Flags().StringVar(&runAs, "user", "bunker", "user the backup runs as (host agent); must exist")
+	cmd.Flags().StringVar(&dockerDir, "docker", "", "schedule the container agent in this folder with cron")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the files and commands, change nothing")
+	cmd.Flags().BoolVar(&force, "force", false, "replace existing service, timer or cron files")
+	return cmd
+}
+
+func newAgentUninstallCmd() *cobra.Command {
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "remove the agent's systemd timer or cron file",
+		Long: `Undo bunker agent install: disable and stop the timer, then remove
+bunker-agent.service, bunker-agent.timer and /etc/cron.d/bunker-agent,
+whichever exist. agent.yaml, agent.env and the snapshots in S3 are not
+touched. Needs root, except with --dry-run.`,
+		Example: `  sudo bunker agent uninstall
+
+  # see what it would remove
+  bunker agent uninstall --dry-run`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !dryRun && os.Geteuid() != 0 {
+				return errors.New("agent uninstall removes files in /etc: run it with sudo (or use --dry-run)")
+			}
+			in := &agent.Installer{Out: cmd.OutOrStdout(), DryRun: dryRun}
+			return in.Uninstall()
+		},
+	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be removed, change nothing")
+	return cmd
+}
