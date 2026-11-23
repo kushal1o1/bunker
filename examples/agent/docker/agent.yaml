@@ -1,0 +1,26 @@
+# /opt/bunker-agent/agent.yaml: what this server backs up, and where it goes.
+# No secrets here: the S3 key is in agent.env, DB passwords in pgpass.
+
+agent:
+  name: web-01                 # this server's folder in S3; the laptop uses the same name
+
+backup:
+  postgres:
+    - host: shop-postgres      # a database container on bunker-net
+      dbs: [app]
+      user: bunker
+    - host: blog-db
+      dbs: [app]
+      user: bunker
+  paths:
+    - /data/shop/uploads       # a volume, mounted read-only in docker-compose.yml
+
+storage:
+  s3:
+    endpoint: https://s3.eu-central-1.amazonaws.com
+    bucket: my-bunker
+    region: eu-central-1
+    prefix: prod/
+
+encryption:
+  recipient: age1...           # from: bunker keygen --public (on the machine with the private key)
