@@ -47,6 +47,8 @@ hints off with `--no-hints` or by setting `BUNKER_NO_HINTS=1`.
 | [`bunker status [server...]`](#status) | each server's latest snapshot and its agent's last run |
 | [`bunker agent run`](#agent-run) | on a server: back it up and push to S3 (agent mode, in development) |
 | [`bunker agent check`](#agent-check) | on a server: confirm the agent can reach every database, path and S3 |
+| [`bunker agent install`](#agent-install) | on a server: schedule the agent with a systemd timer or cron |
+| [`bunker agent uninstall`](#agent-uninstall) | on a server: remove that schedule |
 | `bunker completion <shell>` | generate a shell completion script |
 | `bunker help [command]` | help for any command |
 
@@ -465,7 +467,7 @@ Notes:
 Runs on the server itself: back up the databases and paths in `agent.yaml`,
 encrypt with the public key and upload the snapshot to S3. It runs once and
 exits: schedule it with a systemd timer or cron on the server. Agent mode is
-in development.
+in development; see [Agent mode](agent.md) to set it up.
 
 ```bash
 # one backup now (config: /etc/bunker/agent.yaml)
@@ -541,3 +543,87 @@ Notes:
 - Exit code `1` if any check fails. Warnings do not fail.
 - `check.json` is overwritten by the next check. The agent's upload-only key
   cannot delete it, and bunker ignores it everywhere else.
+
+---
+
+## agent install
+
+Schedules the agent, and does nothing else: it writes a systemd service and
+timer (host agent) or a cron file (container agent). Users, permissions,
+`agent.yaml` and `agent.env` are yours to set up first; see
+[Agent mode](agent.md).
+
+```bash
+# host agent, every day at 03:00
+sudo bunker agent install
+
+# another time, and see the files first
+sudo bunker agent install --at 01:30 --dry-run
+
+# container agent in /opt/bunker-agent
+sudo bunker agent install --docker /opt/bunker-agent
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--at` | `03:00` | daily time, server local time |
+| `--user` | `bunker` | user the backup runs as (host agent); must exist |
+| `--docker` | | schedule the container agent in this folder with cron |
+| `--dry-run` | `false` | print the files and commands, change nothing |
+| `--force` | `false` | replace an existing service, timer or cron file |
+
+```
+Config /etc/bunker/agent.yaml: ok (agent web-01)
+wrote /etc/systemd/system/bunker-agent.service
+wrote /etc/systemd/system/bunker-agent.timer
+ran systemctl daemon-reload
+ran systemctl enable --now bunker-agent.timer
+
+NEXT                        LEFT     LAST  PASSED  UNIT                ACTIVATES
+Tue 2026-11-24 03:04:12 UTC 9h left  -     -       bunker-agent.timer  bunker-agent.service
+
+Run one now to test: sudo systemctl start bunker-agent && journalctl -u bunker-agent
+```
+
+| Mode | Writes | Runs |
+|---|---|---|
+| host | `/etc/systemd/system/bunker-agent.service` and `.timer` | `systemctl daemon-reload`, `systemctl enable --now bunker-agent.timer` |
+| `--docker <dir>` | `/etc/cron.d/bunker-agent` | nothing |
+
+Notes:
+
+- `agent.yaml` is checked first (`-c`, or `/etc/bunker/agent.yaml`; with
+  `--docker`, `<dir>/agent.yaml`). A broken config writes nothing.
+- The service runs this bunker binary with that config and reads `agent.env`
+  from the same folder.
+- The timer adds up to 10 minutes of random delay, so servers do not all
+  upload at once, and catches up on a run missed while the server was off.
+- The files are plain systemd and cron files. Edit them for any other
+  schedule.
+- Needs root, except with `--dry-run`. Hosts without systemd: use cron (see
+  [Agent mode](agent.md)).
+
+---
+
+## agent uninstall
+
+Undoes `agent install`: disables the timer and removes
+`bunker-agent.service`, `bunker-agent.timer` and `/etc/cron.d/bunker-agent`,
+whichever exist.
+
+```bash
+sudo bunker agent uninstall
+
+# see what it would remove
+bunker agent uninstall --dry-run
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--dry-run` | `false` | print what would be removed, change nothing |
+
+Notes:
+
+- `agent.yaml`, `agent.env` and the snapshots in S3 are not touched.
+- Running it again when nothing is installed is fine.
+- Needs root, except with `--dry-run`.
