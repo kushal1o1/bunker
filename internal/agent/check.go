@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -104,13 +105,19 @@ func (c *Checker) checkPostgres(ctx context.Context) []CheckResult {
 		}
 		name := pg.Group + "/" + pg.DB
 		if _, err := c.output(ctx, pg.ProbeArgv()); err != nil {
-			out = append(out, CheckResult{Fail, "postgres", name + ": " + oneLine(err.Error())})
+			msg := pgpassWarning.ReplaceAllString(err.Error(), "")
+			out = append(out, CheckResult{Fail, "postgres", name + ": " + oneLine(msg)})
 			continue
 		}
 		out = append(out, CheckResult{OK, "postgres", name})
 	}
 	return out
 }
+
+// pgpassWarning is libpq's warning about a pgpass file others can read. The
+// pgpass check already reports that, more clearly, so the postgres line
+// keeps only the error itself.
+var pgpassWarning = regexp.MustCompile(`WARNING: password file "[^"]*" has group or world access;[^\n]*\n?`)
 
 // output runs argv to the end and returns its stdout. It is only used for
 // small outputs (a version, a schema), and is bounded by probeTimeout.
