@@ -31,3 +31,21 @@ mark {
     background: #222222;
     color: #ffffff;
 }
+/* Collapsible file blocks (??? example): a thin gray border, no color. */
+.md-typeset .admonition.example,
+.md-typeset details.example,
+.md-typeset .example:focus-within {
+    border-color: var(--md-default-fg-color--lightest);
+    border-width: 1px;
+    box-shadow: none;
+}
+
+.md-typeset .example > .admonition-title,
+.md-typeset .example > summary {
+    background-color: transparent;
+}
+
+.md-typeset .example > .admonition-title::before,
+.md-typeset .example > summary::before {
+    background-color: var(--md-default-fg-color--light);
+}

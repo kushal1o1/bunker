@@ -13,9 +13,25 @@ bunker backs up your databases and files from every server in one run. It does
 not reinvent backup tools. It orchestrates them and handles the rest: many
 servers in parallel, timeouts, encryption, verification and retention.
 
+By default bunker pulls from your servers over SSH. Optionally, a server can
+run bunker as an [agent](agent.md) and push to S3 by itself (dotted line):
+nothing logs in, and no machine of yours has to be on.
+
 ```mermaid
 flowchart LR
-    A["servers<br/>databases · files"] -->|ssh| B["bunker<br/>zstd → age"] --> C["storage<br/>sha256 manifest"]
+    subgraph fleet["your servers"]
+        V1["vps-01<br/>databases · files"]
+        V2["vps-02<br/>databases · files"]
+        V3["vps-03<br/>bunker agent (optional)<br/>systemd or Docker"]
+    end
+    subgraph you["your machine: bunker"]
+        O["orchestrator<br/>concurrency · timeouts · keepalive"]
+        P["zstd → age → sha256"]
+    end
+    V1 -->|ssh, read-only| O
+    V2 -->|ssh, read-only| O
+    O --> P --> S[("storage: disk or S3<br/>snapshots + manifest.json")]
+    V3 -.->|upload-only key| S
 ```
 
 ## How it works

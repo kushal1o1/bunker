@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/kushal1o1/bunker/internal/agent"
@@ -59,46 +57,97 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 	now := time.Now()
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "SERVER\tMODE\tLAST SNAPSHOT\tAGE\tSIZE\tLAST RUN")
-	attention := 0
+	// Servers are checked in parallel, and each row is printed as soon as it
+	// and every row above it are ready, so the table fills in config order.
+	// Fixed column widths make that possible without buffering the table.
+	nameWidth := len("SERVER")
 	for _, name := range targets {
-		isAgent := cfg.Servers[name].Agent
-		mode, lastRun := "pull", "-"
+		nameWidth = max(nameWidth, len(name))
+	}
+	out := cmd.OutOrStdout()
+	printRow := func(r statusRow) {
+		fmt.Fprintf(out, "%-*s  %-5s  %-19s  %-6s  %-9s  %s\n", nameWidth, r.name, r.mode, r.snap, r.age, r.size, r.lastRun)
+	}
+	printRow(statusRow{name: "SERVER", mode: "MODE", snap: "LAST SNAPSHOT", age: "AGE", size: "SIZE", lastRun: "LAST RUN"})
 
-		snap, age, size := "none", "-", "-"
-		rows, err := listMerged(ctx, stores, name)
-		if err != nil {
-			return err
-		}
-		found := false
-		for _, r := range rows {
-			if r.complete() {
-				snap, age, size = r.id, humanAge(now.Sub(r.created)), backup.HumanBytes(r.size())
-				found = true
-				break
+	// A progress line on a terminal only; cron and pipes get just the table.
+	progress := func(int) {}
+	clearLine := func() {}
+	if isTerminal() {
+		errOut := cmd.ErrOrStderr()
+		progress = func(done int) { fmt.Fprintf(errOut, "\rchecking %d/%d servers...", done, len(targets)) }
+		clearLine = func() { fmt.Fprint(errOut, "\r\033[K") }
+	}
+
+	rows := make([]statusRow, len(targets))
+	finished := make([]bool, len(targets))
+	doneCh := make(chan int)
+	sem := make(chan struct{}, cfg.Concurrency)
+	for i, name := range targets {
+		go func() {
+			sem <- struct{}{}
+			rows[i] = serverStatus(ctx, cfg.Servers[name].Agent, stores, name, now)
+			<-sem
+			doneCh <- i
+		}()
+	}
+
+	attention, next := 0, 0
+	progress(0)
+	for done := 1; done <= len(targets); done++ {
+		finished[<-doneCh] = true
+		if finished[next] {
+			clearLine()
+			for next < len(targets) && finished[next] {
+				printRow(rows[next])
+				if rows[next].bad {
+					attention++
+				}
+				next++
 			}
 		}
-
-		bad := !found
-		if isAgent {
-			mode = "agent"
-			var failed bool
-			lastRun, failed = agentLastRun(ctx, stores.Remote, name, now)
-			bad = bad || failed
+		if done < len(targets) {
+			progress(done)
 		}
-		if bad {
-			attention++
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", name, mode, snap, age, size, lastRun)
-	}
-	if err := w.Flush(); err != nil {
-		return err
 	}
 	if attention > 0 {
 		return fmt.Errorf("%d server(s) need attention", attention)
 	}
 	return nil
+}
+
+type statusRow struct {
+	name, mode, snap, age, size, lastRun string
+	bad                                  bool
+}
+
+// serverStatus is one server's row. bad means it needs attention: no
+// complete snapshot, a failed agent run, or snapshots that cannot be listed.
+func serverStatus(ctx context.Context, isAgent bool, stores *backup.Stores, name string, now time.Time) statusRow {
+	r := statusRow{name: name, mode: "pull", snap: "none", age: "-", size: "-", lastRun: "-"}
+	if isAgent {
+		r.mode = "agent"
+	}
+	snaps, err := listMerged(ctx, stores, name)
+	if err != nil {
+		r.snap, r.lastRun, r.bad = "-", "cannot list snapshots: "+clip(oneLine(err), 100), true
+		return r
+	}
+	found := false
+	for _, s := range snaps {
+		if s.complete() {
+			r.snap, r.age, r.size = s.id, humanAge(now.Sub(s.created)), backup.HumanBytes(s.size())
+			found = true
+			break
+		}
+	}
+	r.bad = !found
+	if isAgent {
+		var failed bool
+		r.lastRun, failed = agentLastRun(ctx, stores.Remote, name, now)
+		r.bad = r.bad || failed
+	}
+	return r
 }
 
 // agentLastRun describes an agent's last run from its status.json. failed
