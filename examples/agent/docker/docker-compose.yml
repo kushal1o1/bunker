@@ -5,7 +5,7 @@
 
 services:
   bunker-agent:
-    image: ghcr.io/kushal1o1/bunker:v0.5.0-dev
+    image: ghcr.io/kushal1o1/bunker:v0.5.0
     command: agent run
     env_file: agent.env                # read by compose on the host, not by the container
     environment:
