@@ -54,3 +54,31 @@ func TestAgentInstallRejectsUserWithDocker(t *testing.T) {
 		t.Fatalf("err = %v, want --user refused with --docker", err)
 	}
 }
+
+func TestAgentMissingDefaultConfigHintsAtC(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "agent.yaml")
+	prev := defaultAgentConfig
+	defaultAgentConfig = missing
+	t.Cleanup(func() { defaultAgentConfig = prev })
+
+	for _, args := range [][]string{{"agent", "run"}, {"agent", "check"}, {"agent", "install", "--dry-run"}} {
+		cmd := newRootCmd()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs(args)
+		err := cmd.ExecuteContext(context.Background())
+		if err == nil || !strings.Contains(err.Error(), missing) || !strings.Contains(err.Error(), "use -c <path>") {
+			t.Errorf("%v: err = %v, want the path and the -c hint", args, err)
+		}
+	}
+
+	// With -c the path was chosen on purpose: no hint.
+	cmd := newRootCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"-c", missing, "agent", "check"})
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil || strings.Contains(err.Error(), "use -c") {
+		t.Errorf("with -c: err = %v, want no hint", err)
+	}
+}

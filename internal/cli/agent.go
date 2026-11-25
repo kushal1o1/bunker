@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"text/tabwriter"
@@ -23,12 +24,24 @@ var agentStore = func(cfg *agent.Config) (backup.Store, agent.ServerFiles, error
 	return s, s, nil
 }
 
+// defaultAgentConfig is where the agent looks without -c; tests change it.
+var defaultAgentConfig = agent.DefaultConfigPath
+
 // agentConfigPath is -c when given, else the agent's default location.
 func agentConfigPath(cmd *cobra.Command) string {
 	if cmd.Flags().Changed("config") {
 		return configPath
 	}
-	return agent.DefaultConfigPath
+	return defaultAgentConfig
+}
+
+// withConfigHint points to -c when the default agent.yaml does not exist.
+// With -c the path was chosen on purpose, so the error stays as it is.
+func withConfigHint(cmd *cobra.Command, err error) error {
+	if errors.Is(err, fs.ErrNotExist) && !cmd.Flags().Changed("config") {
+		return fmt.Errorf("%w (use -c <path> for an agent.yaml elsewhere)", err)
+	}
+	return err
 }
 
 func newAgentCmd() *cobra.Command {
@@ -64,7 +77,7 @@ retention and restore run on your laptop. The config is
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := agent.Load(agentConfigPath(cmd))
 			if err != nil {
-				return err
+				return withConfigHint(cmd, err)
 			}
 			store, status, err := agentStore(cfg)
 			if err != nil {
@@ -106,7 +119,7 @@ any check fails; warnings do not fail.`,
 			p := agentConfigPath(cmd)
 			cfg, err := agent.Load(p)
 			if err != nil {
-				return err
+				return withConfigHint(cmd, err)
 			}
 			var files agent.ServerFiles
 			_, f, err := agentStore(cfg)
@@ -207,7 +220,7 @@ Existing files are never replaced without --force. Needs root, except with
 			if real, err := filepath.EvalSymlinks(bin); err == nil {
 				bin = real
 			}
-			return in.InstallSystemd(agent.SystemdOptions{Config: cfgPath, Binary: bin, User: runAs, At: at})
+			return withConfigHint(cmd, in.InstallSystemd(agent.SystemdOptions{Config: cfgPath, Binary: bin, User: runAs, At: at}))
 		},
 	}
 	cmd.Flags().StringVar(&at, "at", "03:00", "daily time to run, HH:MM (server local time)")
