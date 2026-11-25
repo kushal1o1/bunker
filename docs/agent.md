@@ -7,19 +7,35 @@ The agent holds only the age **public** key and an S3 key that can only
 **upload**, so a hacked server can neither read nor delete old backups.
 Verify, retention and restore stay on your laptop.
 
+```mermaid
+flowchart LR
+    subgraph server["server"]
+        D["databases · files"] --> A["bunker agent<br/>zstd → age (public key)"]
+    end
+    A -->|upload-only key| S[("S3")]
+    S --> L["your laptop (private key)<br/>status · list · verify · retention"]
 ```
-server (agent):  pg_dump / tar -> zstd -> age (public key) -> S3
-laptop:          bunker status / list / verify / retention  <- S3
-```
-
-!!! note
-    Agent mode is in development (`v0.5.0-dev`).
 
 Two ways to run it, same binary:
 
-- **Host agent**: a systemd timer on a plain server.
-- **Container agent**: one container next to your Docker stacks. It covers
-  databases in containers and named volumes, without the Docker socket or root.
+**Host agent**: a systemd timer on a plain server.
+
+```mermaid
+flowchart LR
+    T["systemd timer"] --> H["bunker<br/>user bunker"]
+    H -->|socket, peer login| P[("Postgres")]
+    H -->|ACL read| F["files"]
+```
+
+**Container agent**: one container next to your Docker stacks. It covers
+databases in containers and named volumes, without the Docker socket or root.
+
+```mermaid
+flowchart LR
+    C["cron"] --> K["bunker container<br/>uid 10001"]
+    K -->|bunker-net, pgpass| P[("Postgres containers")]
+    K -->|read-only mounts| V["volumes"]
+```
 
 Agent mode runs on Linux servers. The laptop side (`status`, `list`, `verify`,
 `retention`) works on Linux, macOS and Windows.
@@ -108,11 +124,10 @@ Ready-made files: [`examples/agent/host/`](https://github.com/kushal1o1/bunker/t
     GRANT pg_read_all_data TO bunker;   -- Postgres 14+
     ```
 
-3. Install the binary. Agent mode needs `v0.5.0-dev` or later (`latest`
-   still points to `v0.4.0`):
+3. Install the binary. Agent mode needs `v0.5.0` or later:
 
     ```bash
-    VERSION=v0.5.0-dev
+    VERSION=v0.5.0
     FILE=bunker-linux-amd64    # or bunker-linux-arm64 (uname -m prints aarch64)
     curl -LO https://github.com/kushal1o1/bunker/releases/download/$VERSION/$FILE
     curl -LO https://github.com/kushal1o1/bunker/releases/download/$VERSION/checksums.txt
@@ -278,7 +293,7 @@ One agent container per server covers every project on it. Ready-made files:
    these steps use `/opt/bunker-agent`):
 
     ```bash
-    VERSION=v0.5.0-dev
+    VERSION=v0.5.0
     BASE=https://raw.githubusercontent.com/kushal1o1/bunker/$VERSION/examples/agent/docker
     sudo mkdir -p /opt/bunker-agent && sudo chown $USER /opt/bunker-agent
     cd /opt/bunker-agent
@@ -304,7 +319,7 @@ One agent container per server covers every project on it. Ready-made files:
 
         services:
           bunker-agent:
-            image: ghcr.io/kushal1o1/bunker:v0.5.0-dev
+            image: ghcr.io/kushal1o1/bunker:v0.5.0
             command: agent run
             env_file: agent.env                # read by compose on the host, not by the container
             environment:

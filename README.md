@@ -23,23 +23,29 @@ pulls them over SSH (read-only), then compresses, encrypts and checksums
 everything on your machine. It does not reinvent backup tools. It orchestrates
 them.
 
+## How it works
+
+By default bunker pulls from your servers over SSH. Optionally, a server can
+run bunker as an [agent](https://kushal1o1.github.io/bunker/agent/) and push
+to S3 by itself (dotted line): nothing logs in, and no machine of yours has to
+be on.
+
 ```mermaid
 flowchart LR
-    subgraph fleet["your servers (read-only)"]
+    subgraph fleet["your servers"]
         V1["vps-01<br/>databases · files"]
         V2["vps-02<br/>databases · files"]
-        V3["vps-N<br/>databases · files"]
+        V3["vps-03<br/>bunker agent (optional)<br/>systemd or Docker"]
     end
     subgraph you["your machine: bunker"]
         O["orchestrator<br/>concurrency · timeouts · keepalive"]
         P["zstd → age → sha256"]
     end
-    V1 -->|ssh| O
-    V2 -->|ssh| O
-    V3 -->|ssh| O
-    O --> P --> S[("storage<br/>snapshots + manifest.json")]
+    V1 -->|ssh, read-only| O
+    V2 -->|ssh, read-only| O
+    O --> P --> S[("storage: disk or S3<br/>snapshots + manifest.json")]
+    V3 -.->|upload-only key| S
 ```
-
 
 ## Install
 

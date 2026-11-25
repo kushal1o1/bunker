@@ -11,27 +11,14 @@
 - Connect timeout, keepalive, clean `Ctrl-C`
 - Back up with the public key only (`encryption.recipient`)
 - `bunker status`: each server's newest snapshot and its agent's last run
+- [Agent mode](agent.md): `bunker agent run` on the server, pushing straight
+  to S3, on a plain host or in Docker, without root
 
 ## Next
 
-1. [Agent mode](agent.md), in development: `bunker agent run` on the server,
-   pushing straight to S3. Covers Docker (databases and volumes) without root
-2. `backup restore` to a local folder
-3. `server check`, `--json`, failure notifications
-4. Resumable uploads: skip artifacts already in S3
-
-## Agent mode
-
-An optional `bunker agent run` on each server, for when no machine of yours is
-always on, or a server cannot be reached over SSH:
-
-- backs the server up on its own schedule and pushes straight to S3
-- gets only the public key and upload-only S3 access, so a hacked server can
-  neither read nor delete old backups
-- writes a status file, so `bunker status` on your laptop shows every server's
-  health
-
-SSH pull stays the default.
+1. `backup restore` to a local folder
+2. `server check`, `--json`, failure notifications
+3. Resumable uploads: skip artifacts already in S3
 
 ## More databases
 
