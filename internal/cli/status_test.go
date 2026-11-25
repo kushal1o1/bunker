@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/kushal1o1/bunker/internal/agent"
 	"github.com/kushal1o1/bunker/internal/backup"
+	"github.com/kushal1o1/bunker/internal/config"
 )
 
 // agentSetup is a config with one pull server ("web", local snapshots from
@@ -157,5 +160,58 @@ func TestVerifyAgentServerReadsS3(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "no such snapshot") {
 		t.Fatalf("verify looked in local storage: %v", err)
+	}
+}
+
+// failingList fails to list one server's snapshots.
+type failingList struct {
+	*memStore
+	server string
+}
+
+func (f failingList) List(ctx context.Context, server string) ([]backup.SnapshotInfo, error) {
+	if server == f.server {
+		return nil, errors.New("access denied")
+	}
+	return f.memStore.List(ctx, server)
+}
+
+func TestStatusOneServerFailingDoesNotHideOthers(t *testing.T) {
+	cfgPath, remote := agentSetup(t)
+	storage := filepath.Join(filepath.Dir(cfgPath), "store")
+	prev := storesFromConfig
+	storesFromConfig = func(*config.Config) (*backup.Stores, error) {
+		return &backup.Stores{Local: &backup.LocalStore{Dir: storage}, Remote: failingList{remote, "web-01"}}, nil
+	}
+	t.Cleanup(func() { storesFromConfig = prev })
+	prevTTY := isTerminal
+	isTerminal = func() bool { return true }
+	t.Cleanup(func() { isTerminal = prevTTY })
+
+	var out, errOut bytes.Buffer
+	cmd := newRootCmd()
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs([]string{"-c", cfgPath, "status"})
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "1 server(s) need attention") {
+		t.Fatalf("err = %v, want one server needing attention", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want header and 2 rows:\n%s", out.String())
+	}
+	if !strings.HasPrefix(lines[0], "SERVER") || !strings.HasPrefix(lines[1], "web ") || !strings.HasPrefix(lines[2], "web-01 ") {
+		t.Errorf("rows not in config order:\n%s", out.String())
+	}
+	if !strings.Contains(lines[1], "pull") || strings.Contains(lines[1], "none") {
+		t.Errorf("web should show its snapshot:\n%s", lines[1])
+	}
+	if !strings.Contains(lines[2], "cannot list snapshots: access denied") {
+		t.Errorf("web-01 should show the error:\n%s", lines[2])
+	}
+	if !strings.Contains(errOut.String(), "checking 0/2 servers...") || strings.Contains(out.String(), "checking") {
+		t.Errorf("progress belongs on stderr only:\nstdout:\n%s\nstderr:\n%q", out.String(), errOut.String())
 	}
 }
