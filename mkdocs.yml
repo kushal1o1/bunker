@@ -12,6 +12,9 @@ theme:
   name: material
   logo: assets/images/bunker-white.png
   favicon: assets/images/favicon.png
+  icon:
+    admonition:
+      example: material/file-document-outline
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -48,6 +51,7 @@ plugins:
 
 markdown_extensions:
   - admonition
+  - pymdownx.details
   - tables
   - toc:
       permalink: true
